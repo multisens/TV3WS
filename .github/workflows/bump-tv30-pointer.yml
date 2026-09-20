@@ -1,4 +1,4 @@
-name: Build, push e bump submodule ccws em TV30
+name: Build, push e bump submodule tv3ws em TV30
 
 on:
   push:
@@ -8,10 +8,10 @@ jobs:
   build-image:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout CCWS (self)
+      - name: Checkout TV3WS (self)
         uses: actions/checkout@v4
         with:
-          path: ccws
+          path: tv3ws
 
       - name: Checkout Infra (Dockerfile + contextos extras)
         uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
       - name: Build e push tv30-tv3ws
         uses: docker/build-push-action@v5
         with:
-          context: ./ccws
+          context: ./tv3ws
           file: ./infra/dockerfiles/tv3ws.Dockerfile
           build-contexts: |
             tv30-data=./infra/user-files-template
@@ -53,24 +53,24 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: Atualizar ponteiro do submodule ccws
+      - name: Atualizar ponteiro do submodule tv3ws
         env:
-          CCWS_SHA: ${{ github.sha }}
+          TV3WS_SHA: ${{ github.sha }}
         run: |
           set -e
           git config user.name  "Luis Claudio Ribeiro Junior"
           git config user.email "luis.claudio.r.jr@gmail.com"
 
-          CURRENT=$(git ls-tree HEAD ccws | awk '{print $3}')
-          if [ "$CURRENT" = "$CCWS_SHA" ]; then
-            echo "Ponteiro ja em $CCWS_SHA — sem mudancas"
+          CURRENT=$(git ls-tree HEAD tv3ws | awk '{print $3}')
+          if [ "$CURRENT" = "$TV3WS_SHA" ]; then
+            echo "Ponteiro ja em $TV3WS_SHA — sem mudancas"
             exit 0
           fi
 
-          echo "Atualizando ponteiro do submodule ccws: $CURRENT -> $CCWS_SHA"
-          git update-index --cacheinfo 160000 "$CCWS_SHA" ccws
+          echo "Atualizando ponteiro do submodule tv3ws: $CURRENT -> $TV3WS_SHA"
+          git update-index --cacheinfo 160000 "$TV3WS_SHA" tv3ws
 
-          git commit -m "chore: bump submodule ccws pra ${CCWS_SHA:0:7}"
+          git commit -m "chore: bump submodule tv3ws pra ${TV3WS_SHA:0:7}"
 
           for i in 1 2 3; do
             if git push origin main; then exit 0; fi
