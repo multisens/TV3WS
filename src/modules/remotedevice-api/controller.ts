@@ -1,13 +1,11 @@
 import { Request, Response } from "express";
 import service from "./service";
+import { returnError } from "../../util";
 
 function POSTRemoteDevice(req: Request, res: Response): void {
   const body = req.body;
   if (!body) {
-    res.status(400).json({
-      error: 106,
-      description: "No body defined",
-    });
+    returnError(res, 105, "request body");
     return;
   }
   let missing: string[] = [];
@@ -21,10 +19,7 @@ function POSTRemoteDevice(req: Request, res: Response): void {
   }
 
   if (missing.length > 0) {
-    res.status(400).json({
-      error: 105,
-      description: `Missing argument: ${missing.join(", ")}`,
-    });
+    returnError(res, 105, missing.join(", "));
     return;
   }
   const response = service.createWebSocket(body);
@@ -34,17 +29,11 @@ function POSTRemoteDevice(req: Request, res: Response): void {
 function DELETERemoteDevice(req: Request, res: Response): void {
   const handle = req.params.handle;
   if (!handle) {
-    res.status(400).json({
-      error: 105,
-      description: "Missing argument: handle",
-    });
+    returnError(res, 105, "handle");
     return;
   }
   if (!service.deleteWebSocket(handle)) {
-    res.status(400).json({
-      error: 305,
-      description: "Handler does not exist",
-    });
+    returnError(res, 101, `handle ${handle} does not exist`);
     return;
   }
   res.status(204).json({});
@@ -53,10 +42,7 @@ function DELETERemoteDevice(req: Request, res: Response): void {
 function GETRemoteDevices(req: Request, res: Response): void {
   const classId = req.params["classId"];
   if (!classId) {
-    res.status(400).json({
-      error: 105,
-      description: "Missing argument: classId",
-    });
+    returnError(res, 105, "classId");
     return;
   }
   const devices = service.getRemoteDevices(classId);
@@ -72,19 +58,13 @@ function GETRemoteDevices(req: Request, res: Response): void {
 function GETRemoteDeviceEntryPoint(req: Request, res: Response): void {
   const handle = req.params.handle;
   if (!handle) {
-    res.status(400).json({
-      error: 105,
-      description: "Missing argument: handle",
-    });
+    returnError(res, 105, "handle");
     return;
   }
 
   const device = service.getRemoteDevice(handle);
   if (!device) {
-    res.status(400).json({
-      error: 305,
-      description: "Handler does not exist",
-    });
+    returnError(res, 101, `handle ${handle} does not exist`);
     return;
   }
   res.status(200).json(device);
@@ -93,17 +73,11 @@ function GETRemoteDeviceEntryPoint(req: Request, res: Response): void {
 function DELETERemoteDeviceEntryPoint(req: Request, res: Response): void {
   const handle = req.params.handle;
   if (!handle) {
-    res.status(400).json({
-      error: 105,
-      description: "Missing argument: handle",
-    });
+    returnError(res, 105, "handle");
     return;
   }
   if (!service.removeLocalEntryPoint(handle)) {
-    res.status(400).json({
-      error: 305,
-      description: "Handler does not exist",
-    });
+    returnError(res, 101, `handle ${handle} does not exist`);
     return;
   }
   res.status(204).json({});

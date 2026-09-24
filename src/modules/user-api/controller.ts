@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import service from './service';
 import { UserId } from './types';
+import { returnError } from '../../util';
 
 
 async function GETCurrentUser(req: Request, res: Response): Promise<void> {
@@ -11,12 +12,9 @@ async function GETCurrentUser(req: Request, res: Response): Promise<void> {
 
 async function POSTCurrentUser(req: Request, res: Response): Promise<void> {
     const body: UserId = req.body;
-    if (!body) {
-        res.status(400).json({
-			error : 106,
-			description : 'API unavailable for this runtime environment'
-		});
-		return;
+    if (!body || !body.id) {
+        returnError(res, 105, 'id');
+        return;
     }
     await service.setCurrentUser(body.id);
     res.sendStatus(200);
@@ -25,35 +23,32 @@ async function POSTCurrentUser(req: Request, res: Response): Promise<void> {
 function POSTUserList(req: Request, res: Response): void {
 	service.getUserList(req.body)
 	.then((response) => { res.status(200).json(response) })
+	.catch((err) => returnError(res, 200, err?.message));
 }
 
 function GETUserAttribute(req: Request, res: Response): void {
 	const uuid = req.params.userid;
 	if (!uuid) {
-		res.status(400).json({
-			error : 305,
-			description : 'No user defined'
-		});
+		returnError(res, 105, 'userid');
 		return;
 	}
-	
+
 	if (Object.keys(req.query).length > 0) {
 		const atname = req.query.attribute as string;
 		service.getUserAttribute(uuid, atname)
 		.then((response) => { res.status(200).json(response) })
+		.catch((err) => returnError(res, 200, err?.message));
 	}
 	else {
 		service.getUserAttribute(uuid)
 		.then((response) => { res.status(200).json(response) })
+		.catch((err) => returnError(res, 200, err?.message));
 	}
 }
 
 function GETUserFile(req: Request, res: Response): void {
     if (Object.keys(req.query).length == 0) {
-		res.status(400).json({
-            error : 105,
-			description : 'Missing argument'
-        });
+		returnError(res, 105, 'path');
 		return;
 	}
 
@@ -61,14 +56,11 @@ function GETUserFile(req: Request, res: Response): void {
 	service.checkConsent(path)
 	.then((result) => {
 		if (!result) {
-			res.status(400).json({
-                error : 305,
-                description : 'DTV resource not found'
-            });
+			returnError(res, 305, path);
 		}
 		else {
 			const file_data = service.getFile(path);
-		
+
 			res.setHeader('Content-Length', file_data.size);
 			res.setHeader('Content-Type', file_data.mime);
 			res.setHeader('Content-Disposition', `attachment; filename=${file_data.name}`);
@@ -76,13 +68,14 @@ function GETUserFile(req: Request, res: Response): void {
 			res.end();
 		}
 	})
+	.catch((err) => returnError(res, 200, err?.message));
 }
 
 
 async function GETBroadcasterAttrs(req: Request, res: Response): Promise<void> {
     const { userid, serviceContextId } = req.params;
     if (!userid) {
-        res.status(400).json({ error: 305, description: 'No user defined' });
+        returnError(res, 105, 'userid');
         return;
     }
     const attrs = await service.getBroadcasterAttrs(userid, serviceContextId ?? 'current-service');
@@ -92,11 +85,11 @@ async function GETBroadcasterAttrs(req: Request, res: Response): Promise<void> {
 async function PUTBroadcasterAttrs(req: Request, res: Response): Promise<void> {
     const { userid, serviceContextId } = req.params;
     if (!userid) {
-        res.status(400).json({ error: 305, description: 'No user defined' });
+        returnError(res, 105, 'userid');
         return;
     }
     if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
-        res.status(400).json({ error: 106, description: 'Request body must be a JSON object' });
+        returnError(res, 101, 'request body must be a JSON object');
         return;
     }
     await service.setBroadcasterAttrs(userid, serviceContextId ?? 'current-service', req.body);
@@ -106,14 +99,14 @@ async function PUTBroadcasterAttrs(req: Request, res: Response): Promise<void> {
 
 async function POSTCreateUser(req: Request, res: Response): Promise<void> {
     if (!req.body || typeof req.body !== 'object') {
-        res.status(400).json({ error: 105, description: 'Body JSON obrigatório' });
+        returnError(res, 105, 'request body');
         return;
     }
     try {
         const newUser = await service.createUser(req.body);
         res.status(201).json(newUser);
     } catch (err: any) {
-        res.status(400).json({ error: err.message });
+        returnError(res, 101, err?.message);
     }
 }
 

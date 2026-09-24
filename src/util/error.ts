@@ -1,5 +1,9 @@
-import { Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 
+// Catalogo de codigos de erro do Anexo C (tabela C.3.3). Faixas: 100-199
+// genericos, 200-299 da API, 300-399 acesso a recurso, 400-499 sinal de
+// broadcast. O codigo vai no CORPO da resposta; o status HTTP de falha eh
+// SEMPRE 404 (C.3.2, "por simplicidade").
 const Errors: Record<number, string> = {
     [100]: 'API not found',
     [101]: 'Illegal argument value',
@@ -32,10 +36,30 @@ const Errors: Record<number, string> = {
 }
 
 
-export function returnError(res: Response, code: number, full_description?: string) {
+// Construtor unico de resposta de erro (C.3.2): status fixo 404 + corpo
+// JSON com os dois campos mandatorios. O detalhe opcional eh concatenado
+// na description ("Missing argument: handle") — o antigo campo extra
+// full_description estava fora do formato da norma e ninguem o consumia.
+export function returnError(res: Response, code: number, detail?: string) {
+    const base = Errors[code] ?? 'Unknown error';
     res.status(404).json({
         error: code,
-        description: Errors[code],
-        full_description: full_description
+        description: detail ? `${base}: ${detail}` : base,
     });
+}
+
+// Fallback de rota nao mapeada sob /tv3: sem isso o Express devolve o 404
+// HTML default, fora do formato C.3.2.
+export function apiNotFound(req: Request, res: Response) {
+    returnError(res, 100, `${req.method} ${req.originalUrl}`);
+}
+
+// Ultimo middleware da cadeia: excecao lancada (ou promise rejeitada em
+// handler async, Express 5) vira erro 200 do catalogo — recurso da
+// plataforma indisponivel — em vez de stack trace HTML.
+export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
+    if (res.headersSent) return next(err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[error] ${req.method} ${req.originalUrl}: ${msg}`);
+    returnError(res, 200, msg);
 }

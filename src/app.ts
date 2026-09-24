@@ -3,6 +3,7 @@ import express, { Application, Request, Response, NextFunction } from "express";
 // import middleware
 import basic from './middleware/basic';
 import authorization from './middleware/authorization';
+import { apiNotFound, errorHandler } from './util';
 
 // import modules routes
 import accessAPI from './apis/access';
@@ -35,5 +36,10 @@ app.use("/tv3/remote-device", remotedevAPI);
 app.use("/tv3/sensory-effect-renderers", sensoryEffectRenderersAPI);
 app.use("/tv3", dtvAPI);
 app.use("/tv3", accessAPI);
+
+// camada comum de erro (C.3.2): rota /tv3 nao mapeada -> erro 100 no
+// formato da norma; excecao nao tratada -> erro 200, nunca HTML.
+app.use("/tv3", apiNotFound);
+app.use(errorHandler);
 
 export default app;

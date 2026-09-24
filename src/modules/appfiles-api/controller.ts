@@ -1,14 +1,16 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
 import service, { FileData } from './service';
+import { returnError } from '../../util';
 
 
 function GETAppFile(req:Request, res:Response) {
-    if (!service.validateAppId(req.params.appid) || Object.keys(req.query).length == 0 || req.query.path === undefined) {
-		res.status(400).json({
-			error : 305,
-			description : "DTV resource not found"
-		});
+	if (Object.keys(req.query).length == 0 || req.query.path === undefined) {
+		returnError(res, 105, 'path');
+		return;
+	}
+	if (!service.validateAppId(req.params.appid)) {
+		returnError(res, 305, `appid ${req.params.appid}`);
 		return;
 	}
 
