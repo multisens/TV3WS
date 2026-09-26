@@ -1,12 +1,51 @@
 import core from "../../core";
 import mqttClient, { TOPICS } from "../../mqtt-client";
-import { ReqBody } from "../remotedevice-api/service";
+import redis from "../../redis-client";
+import { ReqBody } from "../../api/multi-device/service";
 import RemoteDevice, { AppNode } from "./remote-device";
 import { WebSocketServer } from "ws";
 import { CapabilitiesMetadata } from "./types";
 
+// P5: os METADADOS do registro (handle, classe, tipos suportados) sao
+// espelhados no armazenamento (remote-devices:index + remote-device:{h} +
+// remote-devices:class:{c}) — observaveis por outros componentes. Os
+// WebSockets vivos ficam necessariamente na memoria do processo; por isso
+// o espelho e LIMPO no boot: apos reinicio nao ha socket sobrevivente, e
+// entrada orfa mentiria sobre dispositivos conectados.
 const devices = new Map<string, RemoteDevice>();
 const devclasses = new Map<string, string[]>();
+
+async function clearStoredRegistry(): Promise<void> {
+    const handles = await redis.smembers('remote-devices:index');
+    const keys = handles.map(h => `remote-device:${h}`);
+    const classKeys = await redis.keys('remote-devices:class:*');
+    const all = [...keys, ...classKeys, 'remote-devices:index'];
+    if (all.length > 0) await redis.del(...all);
+}
+clearStoredRegistry().catch(err => console.error(`[remote-devices] falha limpando registro no boot: ${err?.message}`));
+
+function storeDevice(device: RemoteDevice): void {
+    const handle = device.getHandle();
+    redis.multi()
+        .sadd('remote-devices:index', handle)
+        .sadd(`remote-devices:class:${device.getClass()}`, handle)
+        .hset(`remote-device:${handle}`, {
+            deviceClass: device.getClass(),
+            supportedTypes: JSON.stringify(device.getSupportedTypes()),
+            url: device.getUrl(),
+        })
+        .exec()
+        .catch(err => console.error(`[remote-devices] falha persistindo ${handle}: ${err?.message}`));
+}
+
+function unstoreDevice(handle: string, devclass: string): void {
+    redis.multi()
+        .srem('remote-devices:index', handle)
+        .srem(`remote-devices:class:${devclass}`, handle)
+        .del(`remote-device:${handle}`)
+        .exec()
+        .catch(err => console.error(`[remote-devices] falha removendo ${handle}: ${err?.message}`));
+}
 
 function associateAppNodes() {
   let nodes: AppNode[] = core.app.nodes;
@@ -36,6 +75,7 @@ function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): R
     devclasses.set(devclass, [device.getHandle()]);
   }
 
+  storeDevice(device);
   mqttClient.publish(`${TOPICS.devices}/${devclass}`, JSON.stringify(devclasses.get(devclass)), true);
 
   return device;
@@ -49,6 +89,7 @@ function removeRemoteDevice(handle: string): boolean {
   dev?.terminate();
 
   devices.delete(handle);
+  unstoreDevice(handle, devclass);
   let handles: string[] = devclasses.get(devclass) as string[];
   devclasses.set(devclass, handles.filter(h => h !== handle));
   console.log(`Client ${handle} unregistered.`);

@@ -54,11 +54,25 @@ export function apiNotFound(req: Request, res: Response) {
     returnError(res, 100, `${req.method} ${req.originalUrl}`);
 }
 
-// Ultimo middleware da cadeia: excecao lancada (ou promise rejeitada em
-// handler async, Express 5) vira erro 200 do catalogo — recurso da
-// plataforma indisponivel — em vez de stack trace HTML.
+// Erro de negocio com codigo do catalogo C.3.3: servicos lancam ApiError e
+// o errorHandler traduz para o formato C.3.2 — controlador nao escreve
+// resposta de erro na mao.
+export class ApiError extends Error {
+    constructor(public code: number, detail?: string) {
+        super(detail ?? Errors[code] ?? 'error');
+    }
+}
+
+// Ultimo middleware da cadeia: ApiError vira o codigo declarado; qualquer
+// outra excecao (ou promise rejeitada em handler async, Express 5) vira
+// erro 200 do catalogo — recurso da plataforma indisponivel — em vez de
+// stack trace HTML.
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
     if (res.headersSent) return next(err);
+    if (err instanceof ApiError) {
+        returnError(res, err.code, err.message !== Errors[err.code] ? err.message : undefined);
+        return;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[error] ${req.method} ${req.originalUrl}: ${msg}`);
     returnError(res, 200, msg);

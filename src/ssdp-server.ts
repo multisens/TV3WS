@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv';
 import { Request, Response } from "express";
 import { Server } from '@lvcabral/node-ssdp';
 import { getLocalIP } from './util';
-import { pairingMethods } from './apis/access';
+import { pairingMethods } from './api/client-identification';
 dotenv.config();
 
 const localIP = getLocalIP();

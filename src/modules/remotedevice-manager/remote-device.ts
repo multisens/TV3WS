@@ -1,6 +1,6 @@
 import core from "../../core";
 import mqttClient, { TOPICS } from "../../mqtt-client";
-import { ReqBody } from "../remotedevice-api/service";
+import { ReqBody } from "../../api/multi-device/service";
 import {
   Action,
   CapabilitiesMetadata,

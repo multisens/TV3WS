@@ -25,14 +25,13 @@ router.post('/current-user', controller.POSTCurrentUser);
 router.get('/files', controller.GETUserFile);
 
 /*
-    C.6.14.2 Obtaining broadcaster-specific attributes (Annex C.6.14.2)
+    C.6.14.5 Writing a user attribute value (atributos de emissora)
+        POST /tv3/{scid}/users/{user-id} — resposta JSON com os atributos
+        alterados; valor '' remove. Substitui o antigo PUT
+        .../broadcaster-attrs, fora da Tabela C.2 (item 24). Os atributos
+        de emissora sao LIDOS pelo GET do usuario (C.6.14.2), mesclados.
 */
-router.get('/:userid/broadcaster-attrs', controller.GETBroadcasterAttrs);
-
-/*
-    C.6.14.2 Updating broadcaster-specific attributes (Annex C.6.14.2)
-*/
-router.put('/:userid/broadcaster-attrs', controller.PUTBroadcasterAttrs);
+router.post('/:userid', controller.POSTUserAttributes);
 
 /*
     C.6.14.2 Obtaining a set of user attributes

@@ -56,9 +56,10 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     // Cliente local ja autorizado que perdeu o refresh token (recarga de
     // pagina, armazenamento limpo): reemite o token corrente sem nova
     // consulta ao espectador — o consentimento ja foi dado uma vez.
-    if (local && manager.isAuthorized(clientId)) {
+    if (local && await manager.isAuthorized(clientId)) {
+        const existing = await manager.GetAuthorizedClient(clientId);
         res.status(200).json({
-            refreshToken: manager.GetAuthorizedClient(clientId).getRefreshToken()
+            refreshToken: existing.getRefreshToken()
         });
         return;
     }
@@ -67,7 +68,7 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     logger.debug(`GETAuthorize received authorized = ${authorized}`);
     if (!authorized) return;
 
-    const client = manager.GetAuthorizedClient(clientId);
+    const client = await manager.GetAuthorizedClient(clientId);
 
     if (local) {
         // If it is a local client, return a refresh token
@@ -128,56 +129,56 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
 // dispensava a consulta ao espectador — foi removida junto com a religacao
 // deste caminho (IV.3 da vacina).
 async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response): Promise<boolean> {
-    if (manager.isAuthorized(clientId as string)) {
+    if (await manager.isAuthorized(clientId as string)) {
         returnError(res, 101, 'This client was already authorized before.');
         return false;
     }
 
-    if (manager.isBlocked(clientId as string)) {
+    if (await manager.isBlocked(clientId as string)) {
         returnError(res, 102, 'This client was not authorized before and is blocked.');
         return false;
     }
 
     const authorized = await service.askAuthorization(displayName as string);
     if (authorized) {
-        manager.AuthorizeClient(clientId, clientClass);
+        await manager.AuthorizeClient(clientId, clientClass);
     }
     else {
-        manager.BlockClient(clientId);
+        await manager.BlockClient(clientId);
         returnError(res, 102, 'Viewer did not authorize the client.');
     }
     return authorized;
 }
 
-function GETToken(req: Request, res: Response): void {
+async function GETToken(req: Request, res: Response): Promise<void> {
     logger.debug('\nReceived call to /token');
 
     const clientId = req.query.clientid as string;
     const challengeResponse = req.query['challenge-response'] as string;
     const refreshToken = req.query['refresh-token'] as string;
 
-    if (clientId !== undefined && !manager.isAuthorized(clientId)) {
+    if (clientId !== undefined && !(await manager.isAuthorized(clientId))) {
         returnError(res, 102, `Client ${clientId} is not authorized.`);
         return;
     }
 
     // A classe vem do registro feito na autorizacao (P1) — nao do endereco.
     const local = clientId !== undefined
-        ? manager.GetAuthorizedClient(clientId).isLocal()
+        ? (await manager.GetAuthorizedClient(clientId)).isLocal()
         : true;
 
-    if (!validateTokenParameters(clientId, refreshToken, challengeResponse, local, req.protocol, res)) {
+    if (!(await validateTokenParameters(clientId, refreshToken, challengeResponse, local, req.protocol, res))) {
         return;
     }
 
     // Everything is fine. Generate response body
-    const client = manager.GetAuthorizedClient(clientId);
-    const [token, expire] = manager.getClientAccessToken(clientId as string);
+    const client = await manager.GetAuthorizedClient(clientId);
+    const [token, expire] = await manager.getClientAccessToken(clientId as string);
     const resp: TokenResponse = {
 		accessToken : token,
 		tokenType : "Bearer",
 		expiresIn : expire,
-		refreshToken : client.updateRefreshToken()
+		refreshToken : await manager.rotateRefreshToken(clientId)
 	}
     
     // test if is first access of nom-local client
@@ -198,7 +199,7 @@ function GETToken(req: Request, res: Response): void {
     }
 }
 
-function validateTokenParameters(clientId: string, refreshToken: string, challengeResponse: string, local: boolean, protocol: string, res: Response): boolean {
+async function validateTokenParameters(clientId: string, refreshToken: string, challengeResponse: string, local: boolean, protocol: string, res: Response): Promise<boolean> {
     if (clientId === undefined) {
         returnError(res, 105, 'Required header clientid not defined.');
         return false;
@@ -208,7 +209,7 @@ function validateTokenParameters(clientId: string, refreshToken: string, challen
         return false;
     }
 
-    const client = manager.GetAuthorizedClient(clientId);
+    const client = await manager.GetAuthorizedClient(clientId);
 
     // A refresh-token was provided
     if (refreshToken){

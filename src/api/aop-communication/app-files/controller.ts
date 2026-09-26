@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
 import service, { FileData } from './service';
-import { returnError } from '../../util';
+import { returnError } from '../../../util';
 
 
 function GETAppFile(req:Request, res:Response) {

@@ -45,7 +45,11 @@ function GETRemoteDevices(req: Request, res: Response): void {
     returnError(res, 105, "classId");
     return;
   }
-  const devices = service.getRemoteDevices(classId);
+  // 2.0 (norma): a listagem ja entrega o ponto de entrada no campo url.
+  // 2.1 (proposta do Forum): so handles; a URL vem por GET /device/{handle}.
+  const devices = res.locals.apiVersion === '2.1'
+    ? service.getRemoteDevices(classId)
+    : service.getRemoteDevicesWithUrl(classId);
   if (!devices || devices.length === 0) {
     res.status(200).json({});
     return;
@@ -55,7 +59,19 @@ function GETRemoteDevices(req: Request, res: Response): void {
   });
 }
 
+// As rotas por handle estao fora da Tabela C.2 da norma — existem apenas na
+// versao 2.1 (Accept-Version: 2.1). Em 2.0 respondem erro 100.
+function handleRoutesAreV21(req: Request, res: Response): boolean {
+  if (res.locals.apiVersion !== '2.1') {
+    returnError(res, 100, `${req.method} ${req.originalUrl} exists only with Accept-Version: 2.1`);
+    return false;
+  }
+  return true;
+}
+
 function GETRemoteDeviceEntryPoint(req: Request, res: Response): void {
+  if (!handleRoutesAreV21(req, res)) return;
+
   const handle = req.params.handle;
   if (!handle) {
     returnError(res, 105, "handle");
@@ -71,6 +87,8 @@ function GETRemoteDeviceEntryPoint(req: Request, res: Response): void {
 }
 
 function DELETERemoteDeviceEntryPoint(req: Request, res: Response): void {
+  if (!handleRoutesAreV21(req, res)) return;
+
   const handle = req.params.handle;
   if (!handle) {
     returnError(res, 105, "handle");

@@ -29,9 +29,9 @@ function GETRenderer(req: Request, res: Response): void {
     return;
   }
 
-  res.status(200).json({
-    renderer,
-  });
+  // C.6.16.2 (Tabela C.80): o objeto do renderer vai na RAIZ da resposta —
+  // o embrulho {"renderer": ...} era desvio de contrato (item 24).
+  res.status(200).json(renderer);
 }
 
 function POSTControlRenderer(req: Request, res: Response): void {
@@ -56,7 +56,10 @@ function POSTControlRenderer(req: Request, res: Response): void {
 
   try {
     service.controlRenderer(rendererId, body);
-    res.status(204).json({});
+    // C.6.16.3 (Tabela C.81): a resposta e o objeto da Tabela C.80
+    // refletindo o estado corrente do renderer apos a operacao — o 204
+    // vazio era o desvio (item 24; o KNOWN-ISSUES antigo dizia o oposto).
+    res.status(200).json(service.getRendererMetadata(rendererId));
   } catch (error) {
     returnError(res, 101, error instanceof Error ? error.message : String(error));
   }

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import core from '../../core';
+import core from '../../../core';
 
 // As rotas de teste GET /authorize e GET /token que viviam aqui sobrepunham
 // (por ordem de montagem) a implementacao real de apis/access — desafio

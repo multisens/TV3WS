@@ -35,6 +35,14 @@ export default class Client {
         return this.clientClass !== 'non-local';
     }
 
+    // Rehidrata um cliente persistido no armazenamento (P5). O material de
+    // pareamento (secret/challenge/ECDH) e efemero por natureza — vive so
+    // durante o handshake — e nao e restaurado.
+    public restore(refreshToken: string, accessToken?: string): void {
+        this.refreshToken = refreshToken;
+        if (accessToken) this.accessToken = accessToken;
+    }
+
     public getRefreshToken(): string {
         return this.refreshToken;
     }

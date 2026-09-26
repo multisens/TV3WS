@@ -28,32 +28,65 @@ const jwtIssuer = process.env.JWT_ISSUER || 'GenericIssuer';
 // duracao, nao instante).
 const ACCESS_TOKEN_TTL = 24 * 60 * 60;
 
-const blockedClients: string[] = [];
+// P5: a autorizacao de cliente vive no ARMAZENAMENTO (client:{id} e o
+// conjunto clients:blocked) e sobrevive a reinicio. O Map em memoria e so
+// cache do objeto vivo — que carrega tambem o material efemero de
+// pareamento (secret/challenge/ECDH), valido apenas durante o handshake.
+import redis from '../../redis-client';
+
+const clientKey = (id: string) => `client:${id}`;
+const BLOCKED_KEY = 'clients:blocked';
+
 const authorizedClients = new Map<string, Client>();
 
-
-export function isBlocked(id: string): boolean {
-    return blockedClients.includes(id);
+async function persistClient(client: Client): Promise<void> {
+    const fields: Record<string, string> = {
+        class: client.getClass(),
+        refreshToken: client.getRefreshToken(),
+    };
+    if (client.hasAccessToken()) fields.accessToken = client.getAccessToken();
+    await redis.hset(clientKey(client.getId()), fields);
 }
 
-export function isAuthorized(id: string): boolean {
-    return authorizedClients.has(id);
+export async function isBlocked(id: string): Promise<boolean> {
+    return (await redis.sismember(BLOCKED_KEY, id)) === 1;
 }
 
-export function AuthorizeClient(id: string, clientClass: ClientClass = 'local-autonomous') {
+export async function isAuthorized(id: string): Promise<boolean> {
+    if (authorizedClients.has(id)) return true;
+    return (await redis.exists(clientKey(id))) === 1;
+}
+
+export async function AuthorizeClient(id: string, clientClass: ClientClass = 'local-autonomous'): Promise<void> {
     const client = new Client(id, clientClass);
     authorizedClients.set(id, client);
+    await persistClient(client);
 }
 
-export function BlockClient(id: string) {
-    blockedClients.push(id);
+export async function BlockClient(id: string): Promise<void> {
+    await redis.sadd(BLOCKED_KEY, id);
 }
 
-export function GetAuthorizedClient(id: string): Client {
-    if (authorizedClients.has(id)) {
-        return authorizedClients.get(id)!;
+export async function GetAuthorizedClient(id: string): Promise<Client> {
+    const cached = authorizedClients.get(id);
+    if (cached) return cached;
+
+    const stored = await redis.hgetall(clientKey(id));
+    if (stored && stored.refreshToken) {
+        const client = new Client(id, (stored.class as ClientClass) || 'local-autonomous');
+        client.restore(stored.refreshToken, stored.accessToken);
+        authorizedClients.set(id, client);
+        return client;
     }
     throw Error(`Client ${id} is not authorized.`);
+}
+
+// Rotaciona o refresh token e persiste (a rotacao acontece a cada /token).
+export async function rotateRefreshToken(id: string): Promise<string> {
+    const client = await GetAuthorizedClient(id);
+    const token = client.updateRefreshToken();
+    await persistClient(client);
+    return token;
 }
 
 
@@ -74,25 +107,23 @@ function createAccessToken(alg: TokenAlg, clientId: string, clientClass: ClientC
 
 // Devolve [token, expiresIn] com expiresIn em SEGUNDOS RESTANTES (duracao,
 // C.6.1.3) — o valor antigo carregava o instante de expiracao.
-export function getClientAccessToken(id: string): [string, number] {
-    if (authorizedClients.has(id)) {
-        const client = authorizedClients.get(id) as Client;
-        const now = Math.floor(Date.now() / 1000);
+export async function getClientAccessToken(id: string): Promise<[string, number]> {
+    const client = await GetAuthorizedClient(id);
+    const now = Math.floor(Date.now() / 1000);
 
-        if (client.hasAccessToken()) {
-            const token = client.getAccessToken();
-            try {
-                const payload = jwt.verify(token, jwtSecret) as TokenPayload;
-                return [token, Math.max(payload.exp - now, 0)];
-            } catch {
-                // expirado/invalido: cai para emissao de um novo
-            }
+    if (client.hasAccessToken()) {
+        const token = client.getAccessToken();
+        try {
+            const payload = jwt.verify(token, jwtSecret) as TokenPayload;
+            return [token, Math.max(payload.exp - now, 0)];
+        } catch {
+            // expirado/invalido: cai para emissao de um novo
         }
-        const token = createAccessToken('HS256', id, client.getClass());
-        client.setAccessToken(token);
-        return [token, ACCESS_TOKEN_TTL];
     }
-    throw Error(`Client ${id} is not authorized.`);
+    const token = createAccessToken('HS256', id, client.getClass());
+    client.setAccessToken(token);
+    await persistClient(client);
+    return [token, ACCESS_TOKEN_TTL];
 }
 
 

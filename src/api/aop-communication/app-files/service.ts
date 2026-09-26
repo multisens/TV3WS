@@ -1,5 +1,5 @@
 import fs from 'fs';
-import core from '../../core';
+import core from '../../../core';
 import path from 'path';
 
 

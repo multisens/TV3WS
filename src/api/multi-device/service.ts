@@ -1,7 +1,7 @@
 import http from "http";
 import { v4 as uuidv4 } from "uuid";
 import { WebSocketServer } from "ws";
-import * as manager from "../remotedevice-manager/manager";
+import * as manager from "../../modules/remotedevice-manager/manager";
 import { Device } from "./types";
 
 export type ReqBody = {
@@ -48,19 +48,11 @@ function deleteWebSocket(handle: string): boolean {
   return manager.removeRemoteDevice(handle);
 }
 
-function getRemoteDevices(classId: string): Device[] | undefined {
-  const devices = manager.getDevicesByClass(classId);
-  if (!devices) return undefined;
-
-  return devices.map((device) => ({
-    handle: device.getHandle(),
-    supportedTypes: device.getSupportedTypes()
-  }));
-}
-
-function getRemoteDevice(handle: string): DeviceResponse | undefined {
-  const device = manager.getDeviceByHandle(handle);
-  if (!device) return undefined;
+// Garante um ponto de entrada local para o dispositivo e devolve a URL.
+// Reusa o existente — a listagem 2.0 pode ser chamada varias vezes.
+function ensureLocalEntryPoint(device: ReturnType<typeof manager.getDeviceByHandle> & {}): string {
+  const existing = device.getLocalEntryPointUrl();
+  if (existing) return existing;
 
   const server = http.createServer();
   const wsServer = new WebSocketServer({ server });
@@ -72,8 +64,40 @@ function getRemoteDevice(handle: string): DeviceResponse | undefined {
   wsServer.options.port = port;
 
   device.addLocalEntryPoint(wsServer);
+  return device.getLocalEntryPointUrl();
+}
+
+// Versao 2.1 (proposta em discussao no Forum): lista so handles; o ponto de
+// entrada vem depois, por GET /device/{handle}.
+function getRemoteDevices(classId: string): Device[] | undefined {
+  const devices = manager.getDevicesByClass(classId);
+  if (!devices) return undefined;
+
+  return devices.map((device) => ({
+    handle: device.getHandle(),
+    supportedTypes: device.getSupportedTypes()
+  }));
+}
+
+// Versao 2.0 (norma, C.6.15.5): a listagem por classe ja entrega o ponto de
+// entrada de cada dispositivo no campo url — nao existem rotas por handle.
+function getRemoteDevicesWithUrl(classId: string): Device[] | undefined {
+  const devices = manager.getDevicesByClass(classId);
+  if (!devices) return undefined;
+
+  return devices.map((device) => ({
+    handle: device.getHandle(),
+    supportedTypes: device.getSupportedTypes(),
+    url: ensureLocalEntryPoint(device),
+  }));
+}
+
+function getRemoteDevice(handle: string): DeviceResponse | undefined {
+  const device = manager.getDeviceByHandle(handle);
+  if (!device) return undefined;
+
   return {
-    url: device.getLocalEntryPointUrl(),
+    url: ensureLocalEntryPoint(device),
   };
 }
 
@@ -85,4 +109,4 @@ function removeLocalEntryPoint(handle: string): boolean {
   return true;
 }
 
-export default { createWebSocket, deleteWebSocket, getRemoteDevices, getRemoteDevice, removeLocalEntryPoint };
+export default { createWebSocket, deleteWebSocket, getRemoteDevices, getRemoteDevicesWithUrl, getRemoteDevice, removeLocalEntryPoint };

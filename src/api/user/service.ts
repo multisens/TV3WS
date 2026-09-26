@@ -3,6 +3,7 @@ import fs from 'fs';
 import mqttClient, { TOPICS } from '../../mqtt-client';
 import path from 'path';
 import redis from '../../redis-client';
+import { ApiError } from '../../util';
 import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
@@ -48,6 +49,8 @@ async function resolveActiveService(): Promise<string> {
 
 async function updateCurrentUser(m: string): Promise<void> {
     await redis.set(KEY_CURRENT_USER, m);
+    // P3: o despejo do gestor de perfis usa o ultimo acesso mais antigo.
+    if (m) await redis.hset(`user:${m}`, 'lastAccess', String(Date.now()));
 }
 
 async function updateCurrentService(m: string): Promise<void> {
@@ -81,6 +84,10 @@ async function syncUsersFromFile(p: string): Promise<void> {
             }
         }
         if (Object.keys(hashFields).length > 0) {
+            // DEL antes do HSET: substitui em vez de mesclar — mesma
+            // semantica do seed (defeito 8 da vacina: dois escritores
+            // discordantes das chaves de perfil).
+            pipeline.del(`user:${id}`);
             pipeline.hset(`user:${id}`, hashFields);
         }
 
@@ -150,19 +157,19 @@ async function getCurrentUser(): Promise<string> {
 
 async function setCurrentUser(uuid: string): Promise<void> {
     await redis.set(KEY_CURRENT_USER, uuid);
+    if (uuid) await redis.hset(`user:${uuid}`, 'lastAccess', String(Date.now()));
     mqttClient.publish(TOPICS.current_user, uuid, true);
 }
 
 async function getUserList(body: Expression): Promise<UsersIdList> {
+    // C.6.14.1: a restricao de divulgacao vale SEMPRE — sem servico DTV em
+    // uso a chamada falha com erro 300 (a antiga excecao "sem servico lista
+    // tudo" atendia o profile-chooser, que hoje le o armazenamento direto
+    // como funcao da plataforma).
     const currentService = await resolveActiveService();
-    const userIds = await redis.smembers('users:index');
+    if (!currentService) throw new ApiError(300);
 
-    // Sem service ativo (boot do AoP / profile-chooser): retorna todos os users.
-    // Spec C.6.14.1 cobre o caso "com service ativo" — fora desse caso, lista
-    // tudo pra permitir escolha de perfil antes de qualquer service ser selecionado.
-    if (!currentService) {
-        return { users: userIds.map(id => ({ id })) };
-    }
+    const userIds = await redis.smembers('users:index');
 
     const consentPipeline = redis.pipeline();
     userIds.forEach(id => consentPipeline.smembers(`user:${id}:consent`));
@@ -173,7 +180,8 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
         return consent.includes(currentService);
     });
 
-    if (!body || eligibleIds.length === 0) {
+    // corpo opcional (C.6.14.1): ausente ou {} devolve todos os elegiveis
+    if (!body || Object.keys(body).length === 0 || eligibleIds.length === 0) {
         return { users: eligibleIds.map(id => ({ id })) };
     }
 
@@ -181,28 +189,71 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
     eligibleIds.forEach(id => fieldsPipeline.hgetall(`user:${id}`));
     const fieldsResults = await fieldsPipeline.exec() as Array<[Error | null, Record<string, string>]>;
 
-    const matched = eligibleIds.filter((_, i) => {
-        const fields = fieldsResults[i]?.[1] ?? {};
-        return matchExpression(fields, body);
-    });
+    let matched: string[];
+    try {
+        matched = eligibleIds.filter((_, i) => {
+            const fields = fieldsResults[i]?.[1] ?? {};
+            return matchExpression(fields, body);
+        });
+    } catch {
+        // expressao malformada no corpo (C.6.14.1 -> erro 101)
+        throw new ApiError(101, 'invalid query expression in message body');
+    }
 
     return { users: matched.map(id => ({ id })) };
 }
 
-async function getUserAttribute(uuid: string, atname?: string): Promise<UserAttributes> {
-    const currentService = await resolveActiveService();
+// Resolve o contexto de servico de uma chamada: o alias current-service usa
+// o servico ativo (erro 300 se nao houver); um scid explicito vale por si.
+async function resolveScid(scidParam?: string): Promise<string> {
+    if (scidParam && scidParam !== 'current-service') return scidParam;
+    const current = await resolveActiveService();
+    if (!current) throw new ApiError(300);
+    return current;
+}
 
-    // Sem service ativo: profile-chooser pode pedir detalhes pra escolher perfil.
-    // Com service ativo: aplica consent check (C.6.14.2).
-    if (currentService) {
-        const hasConsent = await redis.sismember(`user:${uuid}:consent`, currentService);
-        if (!hasConsent) return null as any;
-    }
+// Garantias comuns de C.6.14.2/C.6.14.5: o usuario existe (305) e concedeu
+// acesso ao broadcaster do servico informado (405).
+async function assertUserVisible(uuid: string, scid: string): Promise<void> {
+    const exists = await redis.sismember('users:index', uuid);
+    if (!exists) throw new ApiError(305, `user ${uuid} does not exist`);
+
+    const hasConsent = await redis.sismember(`user:${uuid}:consent`, scid);
+    if (!hasConsent) throw new ApiError(405);
+}
+
+export type AttributeResult =
+    | { kind: 'text'; value: string }
+    | { kind: 'json'; attrs: Record<string, string> };
+
+// C.6.14.2: com atributo na query a resposta e o VALOR em texto puro; sem
+// atributo, o JSON com todos os atributos (basicos + de emissora) no
+// contexto de servico informado. A chave de query E o nome do atributo
+// (aceita-se tambem o legado ?attribute=<nome>).
+async function getUserAttributes(uuid: string, scidParam: string | undefined, query: Record<string, unknown>): Promise<AttributeResult> {
+    const scid = await resolveScid(scidParam);
+    await assertUserVisible(uuid, scid);
+
+    const keys = Object.keys(query ?? {});
+    const atname = keys.includes('attribute')
+        ? String(query.attribute)
+        : (keys.length > 0 ? keys[0] : undefined);
 
     if (atname) {
-        return await redis.hget(`user:${uuid}`, atname) as any;
+        const basic = await redis.hget(`user:${uuid}`, atname);
+        const fromBroadcaster = basic === null
+            ? await redis.hget(`user:${uuid}:broadcaster-attrs:${scid}`, atname)
+            : null;
+        const value = basic ?? fromBroadcaster;
+        if (value === null) {
+            throw new ApiError(305, `attribute ${atname} does not exist`);
+        }
+        return { kind: 'text', value };
     }
-    return await redis.hgetall(`user:${uuid}`) as any;
+
+    const basics = await redis.hgetall(`user:${uuid}`);
+    const broadcaster = await redis.hgetall(`user:${uuid}:broadcaster-attrs:${scid}`);
+    return { kind: 'json', attrs: { ...basics, ...broadcaster } };
 }
 
 async function checkConsent(avatarPath: string): Promise<boolean> {
@@ -227,119 +278,59 @@ async function checkConsent(avatarPath: string): Promise<boolean> {
 }
 
 
-// --- Create user (ABNT NBR 25608) ---
+// (createUser saiu: criacao de perfil e funcao do gestor de perfis da
+// PLATAFORMA — aop/src/modules/profile-manager — que escreve direto no
+// armazenamento com o teto de P3. Isso tambem elimina o segundo escritor
+// do userData.json — defeito 8 da vacina.)
 
-const VALID_RATINGS = ['L', '10', '12', '14', '16', '18'];
-const VALID_SIDES   = ['left', 'right'];
 
-const DEFAULT_AVATAR_SVG =
-    '<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">' +
-        '<rect width="100" height="100" rx="30" fill="#4d7c5b"/>' +
-        '<circle cx="50" cy="40" r="14" fill="none" stroke="#ffffff" stroke-width="5"/>' +
-        '<path d="M 14 90 a 36 36 0 0 1 72 0" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>' +
-    '</svg>';
+// --- Broadcaster attributes (C.6.14.5) ---
 
-async function createUser(userData: any): Promise<any> {
-    // ABNT NBR 25608 — Tabela 7 (atributos basicos do perfil do telespectador)
-    const nickname = String(userData.nickname || userData.name || '').trim();
-    if (!nickname) throw new Error('nickname é obrigatório');
-    if (nickname.length > 20) throw new Error('nickname deve ter no máximo 20 caracteres');
+// Basicos que a norma proibe redefinir no contexto de um broadcaster.
+const PROTECTED_BASICS = ['id', 'nickname', 'parentalControl', 'maxContentRating'];
 
-    const parentalControl = !!userData.parentalControl;
-    if (parentalControl && !userData.maxContentRating) {
-        throw new Error('maxContentRating é obrigatório quando parentalControl = true');
+// P3: quota da area privativa por perfil x contexto de servico (10.3.3 da
+// norma: ate 20 MB de dados privados por combinacao).
+const PRIVATE_AREA_QUOTA_BYTES = 20 * 1024 * 1024;
+
+// C.6.14.5: escreve/cria atributos de emissora; valor '' remove o atributo.
+// Devolve o conjunto alterado (a resposta da API e esse JSON).
+async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined, attrs: Record<string, unknown>): Promise<Record<string, string>> {
+    const scid = await resolveScid(scidParam);
+    await assertUserVisible(uuid, scid);
+
+    const entries = Object.entries(attrs ?? {});
+    if (entries.length === 0) {
+        throw new ApiError(101, 'message body has no attributes');
     }
-    if (userData.maxContentRating && !VALID_RATINGS.includes(userData.maxContentRating)) {
-        throw new Error(`maxContentRating deve ser um de: ${VALID_RATINGS.join(', ')}`);
-    }
-
-    const closedSigning = !!userData.closedSigning;
-    if (closedSigning) {
-        if (userData.closedSigningWidth !== undefined) {
-            const w = parseInt(userData.closedSigningWidth);
-            if (isNaN(w) || w < 14 || w > 28) throw new Error('closedSigningWidth deve estar entre 14 e 28');
-        }
-        if (userData.closedSigningSide && !VALID_SIDES.includes(userData.closedSigningSide)) {
-            throw new Error('closedSigningSide deve ser "left" ou "right"');
+    for (const [k] of entries) {
+        if (PROTECTED_BASICS.includes(k)) {
+            throw new ApiError(101, `basic attribute ${k} shall not be redefined in a broadcaster context`);
         }
     }
 
-    const userId = `user_${Date.now()}`;
-    const closedCaptioning = !!userData.closedCaptioning;
-
-    // Quem cria perfil pelo profile-chooser concorda com o termo LGPD no form.
-    // Esse aceite vira consent para o serviço ativo, garantindo que o novo perfil
-    // apareça na proxima listagem (que filtra por consent do current-service).
-    const currentService = await readCurrentService();
-    const accessConsent: string[] = Array.isArray(userData.accessConsent) ? userData.accessConsent.slice() : [];
-    if (currentService && !accessConsent.includes(currentService)) {
-        accessConsent.push(currentService);
+    const key = `user:${uuid}:broadcaster-attrs:${scid}`;
+    const changed: Record<string, string> = {};
+    const toSet: Record<string, string> = {};
+    const toDel: string[] = [];
+    for (const [k, v] of entries) {
+        const val = String(v);
+        changed[k] = val;
+        if (val === '') toDel.push(k); else toSet[k] = val;
     }
 
-    const newUser: any = {
-        id:                       userId,
-        nickname,
-        avatar:                   userData.avatar || DEFAULT_AVATAR_SVG,
-        parentalControl,
-        maxContentRating:         parentalControl ? userData.maxContentRating : null,
-        audioLanguage:            userData.audioLanguage || 'pt-BR',
-        closedCaptioningLanguage: closedCaptioning ? (userData.closedCaptioningLanguage || 'pt-BR') : null,
-        userInterfaceLanguage:    userData.userInterfaceLanguage || 'pt-BR',
-        closedCaptioning,
-        closedSigning,
-        closedSigningSide:        closedSigning ? (userData.closedSigningSide || 'right') : null,
-        closedSigningWidth:       closedSigning ? (userData.closedSigningWidth ? parseInt(userData.closedSigningWidth) : 28) : null,
-        audioDescription:         !!userData.audioDescription,
-        dialogEnhancement:        !!userData.dialogEnhancement,
-        voiceGuidance:            !!userData.voiceGuidance,
-        accessConsent
-    };
-
-    // Persiste no Redis (mesma estrutura do syncUsersFromFile)
-    const hashFields: Record<string, string> = {};
-    for (const [k, v] of Object.entries(newUser)) {
-        if (k === 'accessConsent' || k === 'consent') continue;
-        if (v !== null && v !== undefined) hashFields[k] = String(v);
-    }
-    await redis.sadd('users:index', userId);
-    await redis.hset(`user:${userId}`, hashFields);
-    if (newUser.accessConsent.length > 0) {
-        await redis.sadd(`user:${userId}:consent`, ...newUser.accessConsent);
+    // quota da area privativa (P3): mede o hash resultante antes de gravar
+    const current = await redis.hgetall(key);
+    const merged: Record<string, string> = { ...current, ...toSet };
+    toDel.forEach(k => delete merged[k]);
+    const size = Object.entries(merged).reduce((n, [k, v]) => n + Buffer.byteLength(k) + Buffer.byteLength(v), 0);
+    if (size > PRIVATE_AREA_QUOTA_BYTES) {
+        throw new ApiError(200, `private data quota (20 MB) exceeded for this profile and service context`);
     }
 
-    // Persiste no userData.json (mantem seed sincronizado pra rebuild da stack)
-    const userDataFile = process.env.USER_DATA_FILE;
-    if (userDataFile && fs.existsSync(userDataFile)) {
-        try {
-            const current = JSON.parse(fs.readFileSync(userDataFile, 'utf-8'));
-            current.users = current.users || [];
-            current.users.push(newUser);
-            fs.writeFileSync(userDataFile, JSON.stringify(current, null, '\t'));
-        } catch (err) {
-            console.error(`[createUser] Falha persistindo em ${userDataFile}: ${(err as Error).message}`);
-        }
-    }
-
-    // Notifica AoP via MQTT pra recarregar DATA.users
-    mqttClient.publish('aop/users', process.env.USER_DATA_PATH || '/user-files', false);
-
-    return newUser;
-}
-
-
-// --- Broadcaster attributes ---
-
-async function getBroadcasterAttrs(userId: string, serviceContextId: string): Promise<Record<string, string>> {
-    return await redis.hgetall(`user:${userId}:broadcaster-attrs:${serviceContextId}`) ?? {};
-}
-
-async function setBroadcasterAttrs(userId: string, serviceContextId: string, attrs: Record<string, string>): Promise<void> {
-    if (Object.keys(attrs).length === 0) return;
-    const sanitized: Record<string, string> = {};
-    for (const [k, v] of Object.entries(attrs)) {
-        sanitized[k] = String(v);
-    }
-    await redis.hset(`user:${userId}:broadcaster-attrs:${serviceContextId}`, sanitized);
+    if (toDel.length > 0) await redis.hdel(key, ...toDel);
+    if (Object.keys(toSet).length > 0) await redis.hset(key, toSet);
+    return changed;
 }
 
 
@@ -367,4 +358,4 @@ function getMime(ext: string): string {
 }
 
 
-export default { getCurrentUser, setCurrentUser, getUserList, getUserAttribute, checkConsent, getFile, getBroadcasterAttrs, setBroadcasterAttrs, createUser };
+export default { getCurrentUser, setCurrentUser, getUserList, getUserAttributes, checkConsent, getFile, writeBroadcasterAttrs };

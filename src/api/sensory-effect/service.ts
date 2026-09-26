@@ -1,8 +1,8 @@
 import {
   getDeviceByHandle,
   getDevicesByClass,
-} from "../remotedevice-manager/manager";
-import { ControlMetadata } from "../remotedevice-manager/types";
+} from "../../modules/remotedevice-manager/manager";
+import { ControlMetadata } from "../../modules/remotedevice-manager/types";
 
 function getRenderersMetadata() {
   const sensoryDevices = getDevicesByClass("sensory-effect");
