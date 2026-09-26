@@ -1,8 +1,13 @@
 import { randomBytes, ECDH } from 'crypto';
 import { base64UrlEncode } from '../../util';
 
+// Classes de cliente da norma (C.4.1.1), decididas na autorizacao (P1) e
+// gravadas na credencial — nunca inferidas de endereco de rede.
+export type ClientClass = 'local-associated' | 'local-autonomous' | 'non-local';
+
 export default class Client {
     protected id: string;
+    protected clientClass: ClientClass;
     protected refreshToken: string;
     protected challenge?: string;
     protected secret?: Buffer<ArrayBufferLike>;
@@ -12,13 +17,22 @@ export default class Client {
     }
     protected accessToken?: string;
 
-    constructor(id: string) {
+    constructor(id: string, clientClass: ClientClass = 'local-autonomous') {
         this.id = id;
+        this.clientClass = clientClass;
         this.refreshToken = this.createRefreshToken();
     }
 
     public getId(): string {
         return this.id;
+    }
+
+    public getClass(): ClientClass {
+        return this.clientClass;
+    }
+
+    public isLocal(): boolean {
+        return this.clientClass !== 'non-local';
     }
 
     public getRefreshToken(): string {

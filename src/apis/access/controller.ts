@@ -2,8 +2,10 @@ import * as dotenv from 'dotenv';
 import { Request, Response } from 'express';
 import logger from '../../logger';
 import * as manager from '../../modules/auth-manager/manager'
+import { ClientClass } from '../../modules/auth-manager/client';
+import redis from '../../redis-client';
 import service, { pairingMethods } from './service';
-import { getClientIP, isLocalClient, returnError, aes128ECBEncrypt, base64UrlDecode, aes128ECBDecrypt } from '../../util';
+import { returnError, aes128ECBEncrypt, base64UrlDecode, aes128ECBDecrypt } from '../../util';
 dotenv.config();
 
 
@@ -15,8 +17,26 @@ type TokenResponse = {
     serverCert?: string
 };
 
-function isGuaranaDevice(displayName: string): boolean {
-    return typeof displayName === 'string' && displayName.toLowerCase().includes('guarana');
+// Classificacao P1: o cliente se classifica NO MOMENTO da autorizacao, por
+// dois sinais — o metodo de pareamento separa nao-local de local (quem pede
+// pareamento e nao-local), e o Origin confrontado com a lista de origens de
+// aplicacoes associadas (origins:associated, escrita pela plataforma) separa
+// associado de autonomo. Endereco de rede nao participa: em conteineres,
+// requisicoes do proprio equipamento e da rede domestica chegam com o mesmo
+// endereco (medido).
+async function classifyClient(req: Request, pm: string | undefined): Promise<ClientClass> {
+    if (pm !== undefined) return 'non-local';
+
+    const origin = req.get('Origin');
+    if (origin) {
+        try {
+            const scid = await redis.hget('origins:associated', origin);
+            if (scid !== null) return 'local-associated';
+        } catch (err: any) {
+            logger.debug(`classifyClient: falha lendo origins:associated (${err?.message}); assumindo autonomo`);
+        }
+    }
+    return 'local-autonomous';
 }
 
 async function GETAuthorize(req: Request, res: Response): Promise<void> {
@@ -26,13 +46,24 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     const displayName = req.query['display-name'] as string;
     const pm = req.query.pm as string;
     const key = req.query.key as string;
-    const local = isLocalClient(getClientIP(req));
+    const clientClass = await classifyClient(req, pm);
+    const local = clientClass !== 'non-local';
 
     if (!validateAuthorizeParameters(clientId, displayName, pm, key, local, res)) {
         return;
     }
 
-    const authorized = await checkAuthorization(clientId as string, displayName as string, res);
+    // Cliente local ja autorizado que perdeu o refresh token (recarga de
+    // pagina, armazenamento limpo): reemite o token corrente sem nova
+    // consulta ao espectador — o consentimento ja foi dado uma vez.
+    if (local && manager.isAuthorized(clientId)) {
+        res.status(200).json({
+            refreshToken: manager.GetAuthorizedClient(clientId).getRefreshToken()
+        });
+        return;
+    }
+
+    const authorized = await checkAuthorization(clientId as string, displayName as string, clientClass, res);
     logger.debug(`GETAuthorize received authorized = ${authorized}`);
     if (!authorized) return;
 
@@ -40,7 +71,7 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
 
     if (local) {
         // If it is a local client, return a refresh token
-        logger.debug('Request came from local client');
+        logger.debug(`Request came from local client (${clientClass})`);
 
         res.status(200).json({
             refreshToken: client.getRefreshToken()
@@ -93,27 +124,23 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
     return true;
 }
 
-async function checkAuthorization(clientId: string, displayName: string, res: Response): Promise<boolean> {
-    
-    if (isGuaranaDevice(displayName)) {
-        logger.info(`Auto-authorizing client ${clientId} due to Guarana display-name exception.`);
-        manager.AuthorizeClient(clientId);
-        return true;
-    }
-    
+// A antiga excecao por nome de exibicao ("guarana") — porta dos fundos que
+// dispensava a consulta ao espectador — foi removida junto com a religacao
+// deste caminho (IV.3 da vacina).
+async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response): Promise<boolean> {
     if (manager.isAuthorized(clientId as string)) {
         returnError(res, 101, 'This client was already authorized before.');
         return false;
     }
-    
+
     if (manager.isBlocked(clientId as string)) {
         returnError(res, 102, 'This client was not authorized before and is blocked.');
         return false;
     }
-    
+
     const authorized = await service.askAuthorization(displayName as string);
     if (authorized) {
-        manager.AuthorizeClient(clientId);
+        manager.AuthorizeClient(clientId, clientClass);
     }
     else {
         manager.BlockClient(clientId);
@@ -128,7 +155,16 @@ function GETToken(req: Request, res: Response): void {
     const clientId = req.query.clientid as string;
     const challengeResponse = req.query['challenge-response'] as string;
     const refreshToken = req.query['refresh-token'] as string;
-    const local = isLocalClient(getClientIP(req));
+
+    if (clientId !== undefined && !manager.isAuthorized(clientId)) {
+        returnError(res, 102, `Client ${clientId} is not authorized.`);
+        return;
+    }
+
+    // A classe vem do registro feito na autorizacao (P1) — nao do endereco.
+    const local = clientId !== undefined
+        ? manager.GetAuthorizedClient(clientId).isLocal()
+        : true;
 
     if (!validateTokenParameters(clientId, refreshToken, challengeResponse, local, req.protocol, res)) {
         return;

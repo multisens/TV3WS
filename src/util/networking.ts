@@ -45,12 +45,8 @@ export function getClientIP(req: Request): string {
     return findIPinReq(req).replace(/^::ffff:/, '');
 }
 
-export function isLocalClient(ip: string): boolean {
-    if (['127.0.0.1', '::1', 'localhost', getLocalIP()].includes(ip)) return true;
-    // Aceita redes privadas RFC1918 (Docker bridge, intranet, etc).
-    // Comunicacao interna via gateway/sidecar e considerada confiavel.
-    if (/^10\./.test(ip)) return true;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
-    if (/^192\.168\./.test(ip)) return true;
-    return false;
-}
+// isLocalClient (teste de faixa RFC1918) foi REMOVIDO: classe de cliente e
+// decidida na autorizacao e lida da credencial (P1) — em conteineres, o
+// proprio equipamento e a rede domestica chegam com o mesmo endereco, entao
+// endereco de origem nao classifica nada. Ver auth-manager/manager.ts
+// (getRequestClass) e apis/access/controller.ts (classifyClient).

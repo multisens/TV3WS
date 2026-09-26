@@ -1,5 +1,6 @@
 import express, { NextFunction, Request, Response, Router } from 'express';
-import { returnError, getClientIP, isLocalClient } from '../util';
+import { returnError } from '../util';
+import { getRequestClass } from '../modules/auth-manager/manager';
 const router: Router = express.Router();
 
 router.use((req: Request, res: Response, next: NextFunction) => {
@@ -35,11 +36,15 @@ function validateAcceptVersion(req: Request, res: Response): boolean {
     return true;
 }
 
+// Restricao por grupo de API (C.4.1): o cliente NAO LOCAL que chegue por
+// HTTP fora das rotas de identificacao recebe erro 106. A classe vem da
+// credencial (P1) — o antigo teste de faixa RFC1918 invertia o conceito
+// (o nao-local tipico e justamente o dispositivo da rede domestica).
 function validateClientProtocol(req: Request, res: Response): boolean {
-    const ip = getClientIP(req);
+    const clientClass = getRequestClass(req.get('Authorization'));
+    const protocol = (req.get('X-Forwarded-Proto') || req.protocol).toLowerCase();
 
-    // Localhost checks
-    if (!isLocalClient(ip) && req.protocol !== 'https') {
+    if (clientClass === 'non-local' && protocol !== 'https') {
         returnError(res, 106);
         return false;
     }
