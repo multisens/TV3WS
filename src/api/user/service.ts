@@ -11,7 +11,7 @@ dotenv.config();
 // --- session state (Redis is the single source of truth) ---
 // currentUser e currentService NAO sao mantidos em memoria. Toda leitura
 // vai pro Redis em runtime, garantindo consistencia mesmo se a state for
-// alterada externamente (outro CCWS, escrita direta, MQTT perdido etc).
+// alterada externamente (outro tv3ws, escrita direta, MQTT perdido etc).
 
 const KEY_CURRENT_USER    = 'session:current-user';
 const KEY_CURRENT_SERVICE = 'session:current-service-id';

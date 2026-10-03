@@ -12,6 +12,7 @@ import aopCommunicationAPI from './api/aop-communication';
 import userAPI from './api/user';
 import multiDeviceAPI from './api/multi-device';
 import sensoryEffectAPI from './api/sensory-effect';
+import broadcasterSecurityAPI from './api/broadcaster-security';
 
 // middleware configuration
 const app: Application = express();
@@ -24,7 +25,7 @@ app.use('/tv3', authorization);
 app.use("/health", (req: Request, res: Response) => {
   res.status(200).json({
     status: "ok",
-    message: "CCWS is running",
+    message: "tv3ws is running",
   });
 });
 // (a antiga rota fora-da-spec POST /tv3/users saiu: criacao de perfil e
@@ -33,6 +34,7 @@ app.use("/tv3/current-service/users", userAPI);
 app.use("/tv3/:serviceContextId/users", userAPI);   // atributos por contexto de serviço (C.6.14.2/C.6.14.5)
 app.use("/tv3/remote-device", multiDeviceAPI);
 app.use("/tv3/sensory-effect-renderers", sensoryEffectAPI);
+app.use("/tv3/bind-context", broadcasterSecurityAPI);   // C.6.8.2-C.6.8.4
 app.use("/tv3", aopCommunicationAPI);
 app.use("/tv3", clientIdentificationAPI);
 
