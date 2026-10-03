@@ -256,7 +256,10 @@ export function showYesNoPopUpAsync(message: string, timeout: number = 1000): Pr
         const callback: subscribeFunction = (m: string, _) => {
             logger.debug(`Received response ${m} for Yes/No popup`);
             clearTimeout(timeoutId);
-            wrapup(Boolean(m));
+            // so "true" autoriza: a AoP publica "false" no "Nao" e no timeout do
+            // pop-up (aop/public/js/popup.js) e Boolean("false") === true
+            // autorizava justamente o cliente recusado pelo espectador.
+            wrapup(m.trim() === "true");
         };
         subscribe(responseTopic, callback);
         const msg = JSON.stringify({ value: message, timeout: timeout });

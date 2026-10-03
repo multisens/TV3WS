@@ -40,9 +40,10 @@ if (httpsKey && httpsCert) {
 }
 
 
-import ssdpServer from './ssdp-server';
-ssdpServer.start();
-logger.info('SSDP server running on port 1900');
+// Descoberta SSDP (C.3.4): falha de inicio derruba o processo com log claro
+// (D9); o log de "anunciando" so sai quando o bind da 1900 conclui.
+import { startSSDP } from './ssdp-server';
+startSSDP();
 
 
 if (process.send) {

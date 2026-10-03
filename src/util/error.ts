@@ -73,6 +73,13 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
         returnError(res, err.code, err.message !== Errors[err.code] ? err.message : undefined);
         return;
     }
+    // Corpo JSON malformado (rejeitado pelo express.json antes de chegar a
+    // rota) e argumento ilegal do cliente (101), nao falha da plataforma —
+    // ex.: C.6.8.2, "message body is outside the specified format".
+    if ((err as { type?: unknown })?.type === 'entity.parse.failed') {
+        returnError(res, 101, 'message body is not valid JSON, body');
+        return;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[error] ${req.method} ${req.originalUrl}: ${msg}`);
     returnError(res, 200, msg);
