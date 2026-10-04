@@ -5,7 +5,7 @@ import * as manager from '../../modules/auth-manager/manager'
 import { ClientClass } from '../../modules/auth-manager/client';
 import redis from '../../redis-client';
 import service, { pairingMethods } from './service';
-import { returnError, aes128ECBEncrypt, base64UrlDecode, aes128ECBDecrypt } from '../../util';
+import { returnError, aes128ECBEncrypt, base64UrlDecode, base64UrlEncode, aes128ECBDecrypt } from '../../util';
 dotenv.config();
 
 
@@ -24,6 +24,11 @@ type TokenResponse = {
 // associado de autonomo. Endereco de rede nao participa: em conteineres,
 // requisicoes do proprio equipamento e da rede domestica chegam com o mesmo
 // endereco (medido).
+// DECIDIDO (Luis, 03/10): risco aceito — lacuna L1. O Origin eh forjavel
+// fora do navegador: quem manda uma origem presente em origins:associated eh
+// classificado aqui como associado. Mesmo criterio e mesmo risco do plugin
+// da borda (infra/edgegateway/plugin/handler.go); sem mudanca de
+// comportamento.
 async function classifyClient(req: Request, pm: string | undefined): Promise<ClientClass> {
     if (pm !== undefined) return 'non-local';
 
@@ -53,16 +58,13 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
         return;
     }
 
-    // Cliente local ja autorizado que perdeu o refresh token (recarga de
-    // pagina, armazenamento limpo): reemite o token corrente sem nova
-    // consulta ao espectador — o consentimento ja foi dado uma vez.
-    if (local && await manager.isAuthorized(clientId)) {
-        const existing = await manager.GetAuthorizedClient(clientId);
-        res.status(200).json({
-            refreshToken: existing.getRefreshToken()
-        });
-        return;
-    }
+    // DECIDIDO (Luis, 03/10): 101 no reuso de clientid, para qualquer classe
+    // (ver checkAuthorization). Saiu daqui o atalho que reemitia o refresh
+    // token ao cliente local ja autorizado sem nova consulta ao espectador:
+    // com ele, quem conhecesse o clientid de outro cliente local obtinha um
+    // token com a classe dele. Quem perdeu o refresh token repete a
+    // autorizacao com clientid NOVO, e o espectador e consultado de novo
+    // (C.6.1.4.5, p. 219; p. 237 do PDF).
 
     const authorized = await checkAuthorization(clientId as string, displayName as string, clientClass, res);
     logger.debug(`GETAuthorize received authorized = ${authorized}`);
@@ -90,9 +92,21 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
             secret = service.generatePINSecret(client, key);
         }
 
-        res.status(200).json({
-            challenge: service.generateChallenge(client, secret!)
-        });
+        const challenge = service.generateChallenge(client, secret!);
+        if (pm == 'kex') {
+            // Tabela C.3, formato (3) (p. 214; p. 232 do PDF) e C.4.3.3 passo 1
+            // (p. 210; p. 228 do PDF): no kex a resposta leva tambem "key", a
+            // chave parcial do servidor (ponto SEC 1 sem compressao em
+            // base64url, C.4.3.4). Sem ela o cliente nao deriva a chave
+            // simetrica e nao resolve o challenge. Correcao de conformidade
+            // feita na integracao de 04/10; A CONFIRMAR (Luis).
+            res.status(200).json({
+                challenge,
+                key: base64UrlEncode(client.getECDHPublicKey())
+            });
+            return;
+        }
+        res.status(200).json({ challenge });
     }
 }
 
@@ -128,14 +142,29 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
 // A antiga excecao por nome de exibicao ("guarana") — porta dos fundos que
 // dispensava a consulta ao espectador — foi removida junto com a religacao
 // deste caminho (IV.3 da vacina).
+//
+// DECIDIDO (Luis, 03/10): clientid ja autorizado neste receptor da 101, para
+// qualquer classe (local autonomo, local associado, nao local), sem pop-up.
+// Na norma:
+// - Tabela C.3 (p. 215; p. 233 do PDF), erro 101: "if clientid has been
+//   used before";
+// - C.6.1.4.4 (p. 219; p. 237 do PDF): usar na C.6.1.2 um clientid ja
+//   usado eh colisao, e o servidor devolve 101; o cliente repete com
+//   clientid diferente.
+// Clientid recusado pelo espectador (clients:blocked): 101, e nao mais 102,
+// pela nota da mesma Tabela C.3 ("any attempt to authorize immediately
+// returns error 101, without displaying the authorization dialog"). Eh
+// conformidade com a norma numa leitura da decisao acima feita na
+// implementacao; A CONFIRMAR (Luis). O 102 fica so para a recusa no proprio
+// pop-up ("If the user does not grant access").
 async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response): Promise<boolean> {
     if (await manager.isAuthorized(clientId as string)) {
-        returnError(res, 101, 'This client was already authorized before.');
+        returnError(res, 101, 'clientid has been used before (already authorized); retry with a new clientid.');
         return false;
     }
 
     if (await manager.isBlocked(clientId as string)) {
-        returnError(res, 102, 'This client was not authorized before and is blocked.');
+        returnError(res, 101, 'clientid has been used before (blocked by the viewer); retry with a new clientid.');
         return false;
     }
 
