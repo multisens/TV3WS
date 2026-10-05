@@ -14,6 +14,16 @@ assertEnv([
 ]);
 
 import app from './app';
+
+// Endereco divulgado pela descoberta SSDP (C.3.4), resolvido uma vez no boot:
+// o /manifest (sempre servido aqui, atras da borda) e o anuncio, quando ligado
+// neste processo, saem do mesmo valor. Porta da borda invalida derruba o
+// processo com log [ssdp] FALHA (D9).
+import { loadAdvertisedEndpoint, ssdpEnabled, startSSDP } from './ssdp-server';
+import { registerManifest } from './manifest';
+const advertised = loadAdvertisedEndpoint();
+registerManifest(app, advertised);
+
 const http_server = http.createServer(app);
 
 const httpPort = process.env.HTTP_PORT || 44642;
@@ -40,10 +50,21 @@ if (httpsKey && httpsCert) {
 }
 
 
-// Descoberta SSDP (C.3.4): falha de inicio derruba o processo com log claro
-// (D9); o log de "anunciando" so sai quando o bind da 1900 conclui.
-import { startSSDP } from './ssdp-server';
-startSSDP();
+// Anuncio SSDP (C.3.4). No compose quem anuncia e o tv3ws-ssdp, em rede do
+// host (L6 = opcao B, informado pelo Luis em 04/10): o tv3ws da bridge roda com
+// SSDP_ENABLED=false, porque o multicast nao sai da bridge. Sozinho no host
+// (dev-host), o padrao e anunciar daqui: falha de inicio derruba o processo
+// com log claro (D9); o log de "anunciando" so sai quando o bind da 1900 conclui.
+if (ssdpEnabled()) {
+    startSSDP(advertised);
+} else {
+    logger.error(`[ssdp] anuncio desligado (SSDP_ENABLED=${process.env.SSDP_ENABLED?.trim()}); `
+        + 'o /manifest continua servido por este processo');
+    // O anunciante tratava SIGTERM/SIGINT. Sem ele, o node como PID 1 do
+    // container ignoraria o SIGTERM e o docker stop esperaria o SIGKILL.
+    process.once('SIGTERM', () => process.exit(143));
+    process.once('SIGINT', () => process.exit(130));
+}
 
 
 if (process.send) {
