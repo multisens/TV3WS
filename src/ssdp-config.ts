@@ -7,7 +7,10 @@ import { getLocalIP } from './util/networking';
 // Por isso LOCATION e Server-BaseURL usam a porta da borda — 44642, fixa
 // pela norma para o Server-BaseURL — e Server-SecureBaseURL a 44643, e nao
 // HTTP_PORT/HTTPS_PORT do tv3ws (44652/44653 no container, nao publicadas).
-// O anunciante continua no tv3ws; mover para a borda e lacuna sem decisao (L6).
+// L6 decidida = opcao B (informado pelo Luis em 04/10): no compose, quem
+// anuncia e o tv3ws-ssdp (src/ssdp-announcer.ts, rede do host) e o /manifest
+// fica no tv3ws (src/manifest.ts). Os dois usam este modulo, entao o LOCATION
+// e os cabecalhos do /manifest saem da mesma regra.
 
 export const SSDP_ST = 'urn:schemas-sbtvd-org:service:TV3.0WebServices:1';
 
@@ -91,7 +94,8 @@ export function advertiseWarnings(e: AdvertisedEndpoint): string[] {
         // IP local quando SERVER_URL for loopback, ou exigir SSDP_ADVERTISE_HOST).
         out.push(`host anunciado '${e.host}' (via ${e.source}) e de loopback: um cliente em outro `
             + 'equipamento recebe o anuncio mas nao alcanca o LOCATION nem o Server-BaseURL (C.3.4). '
-            + 'Defina SSDP_ADVERTISE_HOST (tv3ws/.env) com o IP ou nome do equipamento na rede.');
+            + 'Defina SSDP_ADVERTISE_HOST com o IP ou nome do equipamento na rede (no compose: .env da raiz '
+            + 'ou tv3ws/.env; com npm run dev: tv3ws/.env).');
     }
     if (e.httpPort !== DEFAULT_EDGE_HTTP_PORT) {
         out.push(`EDGE_HTTP_PORT=${e.httpPort}: a C.3.4 fixa ${DEFAULT_EDGE_HTTP_PORT} no Server-BaseURL; `
