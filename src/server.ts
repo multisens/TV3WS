@@ -50,8 +50,8 @@ if (httpsKey && httpsCert) {
 }
 
 
-// Anuncio SSDP (C.3.4). No compose quem anuncia e o tv3ws-ssdp, em rede do
-// host (L6 = opcao B, informado pelo Luis em 04/10): o tv3ws da bridge roda com
+// Anuncio SSDP (C.3.4). No compose quem anuncia e a borda, em rede do host
+// (L6 = opcao A, decisao do Luis em 09/10): o tv3ws da bridge roda com
 // SSDP_ENABLED=false, porque o multicast nao sai da bridge. Sozinho no host
 // (dev-host), o padrao e anunciar daqui: falha de inicio derruba o processo
 // com log claro (D9); o log de "anunciando" so sai quando o bind da 1900 conclui.

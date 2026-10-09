@@ -4,10 +4,11 @@ import { AdvertisedEndpoint, baseURL, secureBaseURL } from './ssdp-config';
 
 // GET /manifest (C.3.4): o destino do LOCATION do anuncio SSDP. Fica no tv3ws,
 // atras da borda (rota em infra/edgegateway/routes.json), e responde sempre,
-// anuncie este processo ou nao: no compose quem anuncia e o tv3ws-ssdp
-// (src/ssdp-announcer.ts, L6 = opcao B). Os dois calculam o host com a mesma
-// funcao (resolveAdvertisedEndpoint) a partir da mesma configuracao; o compose
-// raiz entrega aos dois os mesmos arquivos de ambiente.
+// anuncie este processo ou nao: no compose quem anuncia e a BORDA, em rede do
+// host (L6 = opcao A, decisao do Luis em 09/10; infra/edgegateway/ssdp, em Go).
+// Os dois calculam o host com a mesma regra (SSDP_ADVERTISE_HOST > SERVER_URL >
+// IP local) a partir dos mesmos arquivos de ambiente, que o compose raiz e o
+// docker-compose.ssdp.yml entregam aos dois.
 export function registerManifest(
   app: Pick<Application, 'use'>,
   endpoint: AdvertisedEndpoint,

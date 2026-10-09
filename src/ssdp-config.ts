@@ -7,10 +7,10 @@ import { getLocalIP } from './util/networking';
 // Por isso LOCATION e Server-BaseURL usam a porta da borda — 44642, fixa
 // pela norma para o Server-BaseURL — e Server-SecureBaseURL a 44643, e nao
 // HTTP_PORT/HTTPS_PORT do tv3ws (44652/44653 no container, nao publicadas).
-// L6 decidida = opcao B (informado pelo Luis em 04/10): no compose, quem
-// anuncia e o tv3ws-ssdp (src/ssdp-announcer.ts, rede do host) e o /manifest
-// fica no tv3ws (src/manifest.ts). Os dois usam este modulo, entao o LOCATION
-// e os cabecalhos do /manifest saem da mesma regra.
+// L6 decidida = opcao A (Luis, 09/10): no compose, quem anuncia e a borda, em
+// rede do host (infra/edgegateway/ssdp, em Go, com a MESMA regra deste
+// modulo), e o /manifest fica no tv3ws (src/manifest.ts). Este modulo serve ao
+// /manifest e ao anuncio do tv3ws rodando sozinho no host (dev-host).
 
 export const SSDP_ST = 'urn:schemas-sbtvd-org:service:TV3.0WebServices:1';
 
