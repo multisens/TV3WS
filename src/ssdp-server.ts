@@ -10,11 +10,10 @@ import {
 } from './ssdp-interface';
 
 // Anuncio SSDP (C.3.4): modulo reutilizavel, sem Express, Redis nem MQTT.
-// L6 decidida = opcao B (informado pelo Luis em 04/10). Dois chamadores:
-//  - src/ssdp-announcer.ts: processo que so anuncia (container tv3ws-ssdp do
-//    compose, em rede do host); a falha dele derruba so ele;
-//  - src/server.ts: o tv3ws rodando sozinho no host (cenario dev-host 1),
-//    quando SSDP_ENABLED nao e false/0; a falha derruba o tv3ws inteiro.
+// L6 decidida = opcao A (Luis, 09/10): no compose quem anuncia e a borda
+// (infra/edgegateway/ssdp, em Go). Este modulo fica para o tv3ws rodando
+// sozinho no host (cenario dev-host 1, src/server.ts), quando SSDP_ENABLED nao
+// e false/0; a falha derruba o tv3ws inteiro (D9).
 // O /manifest, para onde aponta o LOCATION, fica no tv3ws (src/manifest.ts).
 
 const DEFAULT_UDN = 'uuid:TV30-1234-5678-9012-345678901234';
