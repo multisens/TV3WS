@@ -13,7 +13,7 @@ const router: Router = express.Router();
 // norma manda a versao mais recente que ele suporta (LATEST_VERSION, hoje
 // 2.1). No 101 o pedido nao traz versao legivel: vale a da norma, como na
 // falta do cabecalho (C.3.6.5). Leitura feita na implementacao em 10/10;
-// A CONFIRMAR (Luis). A borda tem a mesma negociacao para as rotas dela
+// DECIDIDO (Luis, 10/10). A borda tem a mesma negociacao para as rotas dela
 // (apiVersion, infra/edgegateway/plugin/handler.go) e precisa casar com esta.
 const SUPPORTED_VERSIONS = ['2.0', '2.1'];
 const DEFAULT_VERSION = '2.0';
