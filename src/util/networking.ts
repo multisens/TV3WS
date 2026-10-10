@@ -1,4 +1,3 @@
-import { Request } from 'express';
 import os from 'os';
 
 export function getLocalIP(): string {
@@ -17,36 +16,8 @@ export function getLocalIP(): string {
     return '127.0.0.1';
 }
 
-function findIPinReq(req: Request): string {
-    // Se o peer TCP eh localhost, a requisicao chegou via nosso relay/gateway
-    // local — confiar no socket addr e ignorar X-Forwarded-For (que pode
-    // conter IP do client original, fazendo isLocalClient retornar false
-    // mesmo o caminho sendo trusted).
-    const peer = req.socket.remoteAddress?.replace(/^::ffff:/, '');
-    if (peer && (peer === '127.0.0.1' || peer === '::1')) {
-        return peer;
-    }
-
-    var aux = req.get('x-forwarded-for');
-    if (aux) {
-        var ips = (aux as string).split(',');
-        return ips[0].trim();
-    }
-
-    aux = req.get('x-real-ip');
-    if (aux) {
-        return aux as string;
-    }
-
-    return req.socket.remoteAddress || req.ip || '0.0.0.0';
-}
-
-export function getClientIP(req: Request): string {
-    return findIPinReq(req).replace(/^::ffff:/, '');
-}
-
-// isLocalClient (teste de faixa RFC1918) foi REMOVIDO: classe de cliente e
-// decidida na autorizacao e lida da credencial (P1) — em conteineres, o
-// proprio equipamento e a rede domestica chegam com o mesmo endereco, entao
-// endereco de origem nao classifica nada. Ver auth-manager/manager.ts
-// (getRequestClass) e apis/access/controller.ts (classifyClient).
+// Classe de cliente nao se infere de endereco (P1): e decidida na
+// autorizacao (client-identification/controller.ts, classifyClient) e
+// conferida na borda (D-0510-1, reuniao 05/10 com o Joel). Sairam daqui o
+// isLocalClient (faixa RFC1918) e o getClientIP/findIPinReq que so servia a
+// ele.

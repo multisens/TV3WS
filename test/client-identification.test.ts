@@ -3,6 +3,9 @@
 // trocados por dubles em memoria (sem Redis, sem MQTT, pop-up respondido pelo
 // duble). Confere a decisao de 03/10 (Luis): clientid ja usado da 101, para
 // qualquer classe, sem nova consulta ao espectador (Tabela C.3; C.6.1.4.4).
+// E, da reuniao de 05/10 com o Joel: D-0510-4 (conjunto clients:authorized,
+// coerente com clients:blocked e com o 101) e D-0510-6 (Redis fora do ar da
+// 404 {error:200}, sem travar).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -11,35 +14,13 @@ import { AddressInfo } from 'net';
 import { Server } from 'http';
 import { randomUUID } from 'crypto';
 import express from 'express';
+import { createFakeRedis } from './helpers/fake-redis';
 
 // --- dubles ------------------------------------------------------------------
-type Value = string | Set<string> | Record<string, string>;
-const store = new Map<string, Value>();
-const hash = (k: string): Record<string, string> | undefined => {
-    const v = store.get(k);
-    return v && typeof v === 'object' && !(v instanceof Set) ? v : undefined;
-};
-const set = (k: string): Set<string> | undefined => {
-    const v = store.get(k);
-    return v instanceof Set ? v : undefined;
-};
-
-const fakeRedis = {
-    async hget(k: string, f: string) { return hash(k)?.[f] ?? null; },
-    async hset(k: string, fields: Record<string, string>) {
-        store.set(k, { ...(hash(k) ?? {}), ...fields });
-        return Object.keys(fields).length;
-    },
-    async hgetall(k: string) { return { ...(hash(k) ?? {}) }; },
-    async exists(k: string) { return store.has(k) ? 1 : 0; },
-    async sismember(k: string, m: string) { return set(k)?.has(m) ? 1 : 0; },
-    async sadd(k: string, m: string) {
-        const s = set(k) ?? new Set<string>();
-        const had = s.has(m);
-        s.add(m); store.set(k, s);
-        return had ? 0 : 1;
-    },
-};
+const fake = createFakeRedis();
+const fakeRedis = fake.redis;
+const store = fake.store;
+const members = (k: string) => [...((store.get(k) as Set<string> | undefined) ?? [])];
 
 // Resposta do "espectador" ao pop-up de autorizacao e contagem de pop-ups.
 let viewerAnswer = true;
@@ -63,6 +44,10 @@ stub('core', { ...fakeCore, default: fakeCore });
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const router = require('../src/api/client-identification').default;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const manager = require('../src/modules/auth-manager/manager') as typeof import('../src/modules/auth-manager/manager');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { errorHandler } = require('../src/util') as typeof import('../src/util');
 
 // --- servidor ------------------------------------------------------------------
 let server: Server;
@@ -70,6 +55,7 @@ let base = '';
 before(async () => {
     const app = express();
     app.use('/tv3', router);
+    app.use(errorHandler);   // camada C.3.2 real: excecao -> 404 {error:200}
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3`;
 });
@@ -214,4 +200,74 @@ test('nao local (pm=qrcode): a resposta nao traz "key"', async () => {
     const r = await authorize(randomUUID(), { pm: 'qrcode' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.json.key, undefined);
+});
+
+// --- D-0510-4: clientes autorizados (reuniao 05/10 com o Joel) -------------------
+test('autorizado entra em clients:authorized; recusado so em clients:blocked', async () => {
+    viewerAnswer = true;
+    const ok = randomUUID();
+    assert.equal((await authorize(ok)).status, 200);
+    assert.ok(members('clients:authorized').includes(ok));
+    assert.ok(!members('clients:blocked').includes(ok));
+
+    viewerAnswer = false;
+    const no = randomUUID();
+    expectError(await authorize(no), 102);
+    assert.ok(members('clients:blocked').includes(no));
+    assert.ok(!members('clients:authorized').includes(no));
+
+    assert.ok((await manager.listAuthorizedClients()).includes(ok));
+    assert.ok((await manager.listBlockedClients()).includes(no));
+    const listed = await manager.listAuthorizedClients();
+    assert.deepEqual(listed, [...listed].sort());
+});
+
+test('bloquear um autorizado: sai de clients:authorized, /token recusa (102) e o reuso da 101', async () => {
+    viewerAnswer = true;
+    const cid = randomUUID();
+    const first = await authorize(cid);
+    assert.equal(first.status, 200);
+
+    await manager.BlockClient(cid);
+    assert.ok(!members('clients:authorized').includes(cid));
+    assert.ok(members('clients:blocked').includes(cid));
+    expectError(await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken }), 102);
+    assert.equal(await popUpsDuring(async () => { expectError(await authorize(cid), 101); }), 0);
+});
+
+test('cliente anterior ao conjunto (so client:{id}): reuso da 101 e a migracao do boot o inclui', async () => {
+    viewerAnswer = true;
+    const legacy = randomUUID();
+    const legacyBlocked = randomUUID();
+    await fakeRedis.hset(`client:${legacy}`, { class: 'local-autonomous', refreshToken: 'rt-antigo' });
+    await fakeRedis.hset(`client:${legacyBlocked}`, { class: 'local-autonomous', refreshToken: 'rt-antigo-2' });
+    await fakeRedis.sadd('clients:blocked', legacyBlocked);
+
+    assert.equal(await popUpsDuring(async () => { expectError(await authorize(legacy), 101); }), 0);
+    // antes da migracao, /token nao o reconhece como autorizado
+    expectError(await get('/token', { clientid: legacy, 'refresh-token': 'rt-antigo' }), 102);
+
+    const added = await manager.backfillAuthorizedClients();
+    assert.ok(added >= 1);
+    assert.ok(members('clients:authorized').includes(legacy));
+    assert.ok(!members('clients:authorized').includes(legacyBlocked), 'bloqueado nao entra em clients:authorized');
+    assert.equal(await manager.backfillAuthorizedClients(), 0, 'migracao idempotente');
+
+    const tok = await get('/token', { clientid: legacy, 'refresh-token': 'rt-antigo' });
+    assert.equal(tok.status, 200, JSON.stringify(tok.json));
+});
+
+// --- D-0510-6: Redis fora do ar ----------------------------------------------------
+test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-up', async () => {
+    viewerAnswer = true;
+    fake.setDown(true);
+    try {
+        let r: Awaited<ReturnType<typeof authorize>> | undefined;
+        assert.equal(await popUpsDuring(async () => { r = await authorize(randomUUID(), {}, { Origin: 'http://qualquer.test' }); }), 0);
+        expectError(r!, 200);
+        expectError(await authorize(randomUUID()), 200);
+        expectError(await get('/token', { clientid: randomUUID(), 'refresh-token': 'x' }), 200);
+    } finally {
+        fake.setDown(false);
+    }
 });

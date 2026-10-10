@@ -1,6 +1,5 @@
 import express, { NextFunction, Request, Response, Router } from 'express';
 import { returnError } from '../util';
-import { getRequestClass } from '../modules/auth-manager/manager';
 const router: Router = express.Router();
 
 // Negociacao de versao via Accept-Version (decisao de reuniao 21/09): a
@@ -21,14 +20,13 @@ router.use((req: Request, res: Response, next: NextFunction) => {
     // Basic validation (define res.locals.apiVersion e o header API-Version)
     if (!validateAcceptVersion(req, res)) return;
 
-    // Avoid access validation for authorization API
-    if (req.path === '/authorize' || req.path === '/token') {
-        return next();
-    }
-
-    // Autentication validation
-    if (!validateClientProtocol(req, res)) return;
-
+    // D-0510-1 (reuniao 05/10 com o Joel): a checagem de classe/protocolo
+    // (antigo validateClientProtocol, erro 106 ao nao local fora de HTTPS)
+    // saiu daqui junto com a validacao do accessToken (107): credencial e
+    // classe sao conferidas so na borda.
+    // PENDENTE (Joel): lacuna L3 — sem TLS na borda, o 106 por protocolo da
+    // C.4.1.6 (nao local por HTTP fora de C.6.1.2/C.6.1.3) nao e aplicado em
+    // lugar nenhum depois desta saida.
     next();
 });
 
@@ -53,21 +51,6 @@ function validateAcceptVersion(req: Request, res: Response): boolean {
 
     res.locals.apiVersion = requested;
     res.setHeader('API-Version', requested);
-    return true;
-}
-
-// Restricao por grupo de API (C.4.1): o cliente NAO LOCAL que chegue por
-// HTTP fora das rotas de identificacao recebe erro 106. A classe vem da
-// credencial (P1) — o antigo teste de faixa RFC1918 invertia o conceito
-// (o nao-local tipico e justamente o dispositivo da rede domestica).
-function validateClientProtocol(req: Request, res: Response): boolean {
-    const clientClass = getRequestClass(req.get('Authorization'));
-    const protocol = (req.get('X-Forwarded-Proto') || req.protocol).toLowerCase();
-
-    if (clientClass === 'non-local' && protocol !== 'https') {
-        returnError(res, 106);
-        return false;
-    }
     return true;
 }
 

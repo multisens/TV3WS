@@ -3,7 +3,7 @@ import fs from 'fs';
 import mqttClient, { TOPICS } from '../../mqtt-client';
 import path from 'path';
 import redis from '../../redis-client';
-import { ApiError } from '../../util';
+import { ApiError, execOrThrow } from '../../util';
 import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
@@ -38,88 +38,32 @@ async function resolveActiveService(): Promise<string> {
 
     const pipeline = redis.pipeline();
     userIds.forEach(id => pipeline.sismember(`user:${id}:consent`, currentService));
-    const results = await pipeline.exec() as Array<[Error | null, number]>;
+    const results = await execOrThrow(pipeline);
 
-    const known = results.some(r => r?.[1] === 1);
+    const known = results.some(r => r === 1);
     return known ? currentService : '';
 }
 
 
 // --- MQTT handlers ---
 
+// D-0510-5 (reuniao 05/10 com o Joel; P5, um dono por familia de chave): os
+// perfis (users:index, user:{id}, user:{id}:consent) sao da PLATAFORMA — o
+// gestor de perfis do AoP cria, despeja (P3) e grava o lastAccess quando o
+// usuario corrente muda (aop/src/core.js). A carga inicial do redis so
+// provisiona o banco vazio. Este servico so LE perfis: sairam daqui o
+// syncUsersFromFile (aop/users e semeadura no boot com USER_DATA_FILE) e a
+// escrita do lastAccess. Resta a sessao (session:*), espelho dos topicos.
 async function updateCurrentUser(m: string): Promise<void> {
     await redis.set(KEY_CURRENT_USER, m);
-    // P3: o despejo do gestor de perfis usa o ultimo acesso mais antigo.
-    if (m) await redis.hset(`user:${m}`, 'lastAccess', String(Date.now()));
 }
 
 async function updateCurrentService(m: string): Promise<void> {
     await redis.set(KEY_CURRENT_SERVICE, m);
 }
 
-async function syncUsersFromFile(p: string): Promise<void> {
-    if (!p || !fs.existsSync(p)) return;
-
-    // AoP publica o diretorio em aop/users (USER_DATA_PATH); o initFromRedis passa o arquivo (USER_DATA_FILE).
-    // Aceita ambos: se for diretorio, resolve para userData.json dentro dele.
-    const filePath = fs.statSync(p).isDirectory() ? path.join(p, 'userData.json') : p;
-    if (!fs.existsSync(filePath)) return;
-
-    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    const users: any[] = raw.users ?? raw;
-
-    const pipeline = redis.pipeline();
-
-    for (const user of users) {
-        const id = user.id;
-        if (!id) continue;
-
-        pipeline.sadd('users:index', id);
-
-        const hashFields: Record<string, string> = {};
-        for (const [key, val] of Object.entries(user)) {
-            if (key === 'accessConsent' || key === 'consent') continue;
-            if (val !== null && val !== undefined) {
-                hashFields[key] = String(val);
-            }
-        }
-        if (Object.keys(hashFields).length > 0) {
-            // DEL antes do HSET: substitui em vez de mesclar — mesma
-            // semantica do seed (defeito 8 da vacina: dois escritores
-            // discordantes das chaves de perfil).
-            pipeline.del(`user:${id}`);
-            pipeline.hset(`user:${id}`, hashFields);
-        }
-
-        // Merge (SADD sem DEL): consents concedidos fora do JSON sobrevivem aos syncs.
-        // Consent eh incremental por natureza — nao deve ser sobrescrito a cada reload.
-        const consent: string[] = (user.accessConsent ?? user.consent ?? []);
-        if (consent.length > 0) {
-            pipeline.sadd(`user:${id}:consent`, ...consent);
-        }
-    }
-
-    await pipeline.exec();
-    console.log(`[Redis] Synced ${users.length} users from ${filePath}`);
-}
-
 mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
 mqttClient.addTopicHandler(TOPICS.current_service, updateCurrentService);
-mqttClient.addTopicHandler(TOPICS.users, syncUsersFromFile);
-
-
-// --- startup: restore session and seed users from Redis ---
-
-async function initFromRedis(): Promise<void> {
-    // Sem cache em memoria — currentUser/currentService ficam apenas no Redis.
-    // Apenas seed do users:index a partir do arquivo se Redis estiver vazio.
-    const userCount = await redis.scard('users:index');
-    if (userCount === 0 && process.env.USER_DATA_FILE) {
-        await syncUsersFromFile(process.env.USER_DATA_FILE);
-    }
-}
-
-initFromRedis().catch((err) => console.error('[Redis] Init failed:', err));
 
 
 // --- Expression evaluator ---
@@ -155,9 +99,10 @@ async function getCurrentUser(): Promise<string> {
     return await readCurrentUser();
 }
 
+// C.6.14.4: o lastAccess do perfil (despejo P3) e gravado pela plataforma ao
+// receber aop/currentUser (D-0510-5), nao aqui.
 async function setCurrentUser(uuid: string): Promise<void> {
     await redis.set(KEY_CURRENT_USER, uuid);
-    if (uuid) await redis.hset(`user:${uuid}`, 'lastAccess', String(Date.now()));
     mqttClient.publish(TOPICS.current_user, uuid, true);
 }
 
@@ -173,10 +118,10 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
 
     const consentPipeline = redis.pipeline();
     userIds.forEach(id => consentPipeline.smembers(`user:${id}:consent`));
-    const consentResults = await consentPipeline.exec() as Array<[Error | null, string[]]>;
+    const consentResults = await execOrThrow(consentPipeline) as string[][];
 
     const eligibleIds = userIds.filter((_, i) => {
-        const consent = consentResults[i]?.[1] ?? [];
+        const consent = consentResults[i] ?? [];
         return consent.includes(currentService);
     });
 
@@ -187,12 +132,12 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
 
     const fieldsPipeline = redis.pipeline();
     eligibleIds.forEach(id => fieldsPipeline.hgetall(`user:${id}`));
-    const fieldsResults = await fieldsPipeline.exec() as Array<[Error | null, Record<string, string>]>;
+    const fieldsResults = await execOrThrow(fieldsPipeline) as Record<string, string>[];
 
     let matched: string[];
     try {
         matched = eligibleIds.filter((_, i) => {
-            const fields = fieldsResults[i]?.[1] ?? {};
+            const fields = fieldsResults[i] ?? {};
             return matchExpression(fields, body);
         });
     } catch {
@@ -265,11 +210,11 @@ async function checkConsent(avatarPath: string): Promise<boolean> {
         pipeline.hget(`user:${id}`, 'avatar');
         pipeline.sismember(`user:${id}:consent`, currentService);
     });
-    const results = await pipeline.exec() as Array<[Error | null, string | number]>;
+    const results = await execOrThrow(pipeline);
 
     for (let i = 0; i < userIds.length; i++) {
-        const avatar = results[i * 2]?.[1] as string;
-        const hasConsent = results[i * 2 + 1]?.[1];
+        const avatar = results[i * 2] as string | null;
+        const hasConsent = results[i * 2 + 1];
         if (avatar === avatarPath && hasConsent) {
             return true;
         }

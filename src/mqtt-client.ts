@@ -11,8 +11,8 @@ export const client: MqttClient = mqtt.connect(`mqtt://${brokerUrl}`, {
 });
 
 
+// (aop/users saiu: o tv3ws nao sincroniza mais perfis de arquivo, D-0510-5)
 export const TOPICS = {
-    users: 'aop/users',
     current_user: 'aop/currentUser',
     services: 'aop/services',
     current_service: 'aop/currentService',
@@ -24,7 +24,7 @@ export const TOPICS = {
 }
 
 type TopicHandler = {
-    (m: string, t?: string): void;
+    (m: string, t?: string): void | Promise<void>;
 };
 const TOPIC_HANDLER = new Map<string, TopicHandler[]>();
 
@@ -38,7 +38,14 @@ client.on('message', (topic, message) => {
 
     if (TOPIC_HANDLER.has(topic)) {
         TOPIC_HANDLER.get(topic)?.forEach(f => {
-            f(message.toString(), topic);
+            // D-0510-6: handler assincrono que falha (ex.: Redis fora do ar)
+            // vai para o log; antes era rejeicao solta, que no Node >= 15
+            // derruba o processo (unhandled rejection). Handler sincrono
+            // segue como antes.
+            const pending = f(message.toString(), topic);
+            if (pending instanceof Promise) {
+                pending.catch((err: Error) => console.error(`[mqtt] FALHA no handler de ${topic}: ${err?.message}`));
+            }
         });
     }
     else {
