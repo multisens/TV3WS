@@ -18,18 +18,20 @@ export type DeviceResponse = {
   url: string;
 };
 
-function createWebSocket(body: ReqBody): Response {
+// O servidor so passa a escutar depois que o registro foi gravado: se o
+// armazenamento falhar (D-0510-6), a API responde 404 {error:200} e nao fica
+// porta aberta sem dispositivo.
+async function createWebSocket(body: ReqBody): Promise<Response> {
   const server = http.createServer();
   const wsServer = new WebSocketServer({ server });
   const port = generateDynamicallyPort();
   const uuid = uuidv4();
+  wsServer.options.port = port;
 
+  const device = await manager.addRemoteDevice(body, uuid, wsServer);
   server.listen(port, () => {
     console.log(`WebSocket server is running on port ${port}`);
   });
-  wsServer.options.port = port;
-
-  const device = manager.addRemoteDevice(body, uuid, wsServer);
   console.log(`Client ${device.getHandle()} registered.`);
 
   return {
@@ -44,7 +46,7 @@ function generateDynamicallyPort(): number {
   return Math.floor(min + Math.random() * (max - min));
 }
 
-function deleteWebSocket(handle: string): boolean {
+function deleteWebSocket(handle: string): Promise<boolean> {
   return manager.removeRemoteDevice(handle);
 }
 

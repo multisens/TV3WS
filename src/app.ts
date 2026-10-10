@@ -2,7 +2,6 @@ import express, { Application, Request, Response, NextFunction } from "express";
 
 // import middleware
 import basic from './middleware/basic';
-import authorization from './middleware/authorization';
 import { apiNotFound, errorHandler } from './util';
 
 // APIs por agrupamento do Anexo C (S1/R3): uma pasta por agrupamento em
@@ -12,14 +11,16 @@ import aopCommunicationAPI from './api/aop-communication';
 import userAPI from './api/user';
 import multiDeviceAPI from './api/multi-device';
 import sensoryEffectAPI from './api/sensory-effect';
-import broadcasterSecurityAPI from './api/broadcaster-security';
 
 // middleware configuration
+// D-0510-1 (reuniao 05/10 com o Joel): toda validacao de credencial fica na
+// borda (plugin tv30-auth do edgegateway); o tv3ws so recebe e responde. Sob
+// /tv3 resta a negociacao de versao (basic); a emissao de credencial
+// (/tv3/authorize, /tv3/token) continua aqui, em client-identification.
 const app: Application = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use('/tv3', basic);
-app.use('/tv3', authorization);
 
 // routes
 app.use("/health", (req: Request, res: Response) => {
@@ -34,7 +35,8 @@ app.use("/tv3/current-service/users", userAPI);
 app.use("/tv3/:serviceContextId/users", userAPI);   // atributos por contexto de serviço (C.6.14.2/C.6.14.5)
 app.use("/tv3/remote-device", multiDeviceAPI);
 app.use("/tv3/sensory-effect-renderers", sensoryEffectAPI);
-app.use("/tv3/bind-context", broadcasterSecurityAPI);   // C.6.8.2-C.6.8.4
+// (C.6.8, /tv3/bind-context, saiu: D-0510-2, reuniao 05/10 com o Joel — a
+// borda responde as tres rotas; aqui elas cairiam no erro 100 abaixo)
 app.use("/tv3", aopCommunicationAPI);
 app.use("/tv3", clientIdentificationAPI);
 

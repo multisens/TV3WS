@@ -1,6 +1,7 @@
 import core from "../../core";
 import mqttClient, { TOPICS } from "../../mqtt-client";
 import redis from "../../redis-client";
+import { execOrThrow } from "../../util/redis-result";
 import { ReqBody } from "../../api/multi-device/service";
 import RemoteDevice, { AppNode } from "./remote-device";
 import { WebSocketServer } from "ws";
@@ -12,39 +13,39 @@ import { CapabilitiesMetadata } from "./types";
 // WebSockets vivos ficam necessariamente na memoria do processo; por isso
 // o espelho e LIMPO no boot: apos reinicio nao ha socket sobrevivente, e
 // entrada orfa mentiria sobre dispositivos conectados.
+// D-0510-6 (reuniao 05/10 com o Joel): a gravacao do espelho deixou de ser
+// promessa solta com .catch que so logava. Registro e remocao esperam o
+// armazenamento; se ele falhar, nada muda (memoria e Redis ficam como
+// estavam) e a API responde 404 {error:200}.
 const devices = new Map<string, RemoteDevice>();
 const devclasses = new Map<string, string[]>();
 
-async function clearStoredRegistry(): Promise<void> {
+// Tarefa de boot (server.ts, no primeiro 'ready' do Redis).
+export async function clearStoredRegistry(): Promise<void> {
     const handles = await redis.smembers('remote-devices:index');
     const keys = handles.map(h => `remote-device:${h}`);
     const classKeys = await redis.keys('remote-devices:class:*');
     const all = [...keys, ...classKeys, 'remote-devices:index'];
     if (all.length > 0) await redis.del(...all);
 }
-clearStoredRegistry().catch(err => console.error(`[remote-devices] falha limpando registro no boot: ${err?.message}`));
 
-function storeDevice(device: RemoteDevice): void {
+async function storeDevice(device: RemoteDevice): Promise<void> {
     const handle = device.getHandle();
-    redis.multi()
+    await execOrThrow(redis.multi()
         .sadd('remote-devices:index', handle)
         .sadd(`remote-devices:class:${device.getClass()}`, handle)
         .hset(`remote-device:${handle}`, {
             deviceClass: device.getClass(),
             supportedTypes: JSON.stringify(device.getSupportedTypes()),
             url: device.getUrl(),
-        })
-        .exec()
-        .catch(err => console.error(`[remote-devices] falha persistindo ${handle}: ${err?.message}`));
+        }));
 }
 
-function unstoreDevice(handle: string, devclass: string): void {
-    redis.multi()
+async function unstoreDevice(handle: string, devclass: string): Promise<void> {
+    await execOrThrow(redis.multi()
         .srem('remote-devices:index', handle)
         .srem(`remote-devices:class:${devclass}`, handle)
-        .del(`remote-device:${handle}`)
-        .exec()
-        .catch(err => console.error(`[remote-devices] falha removendo ${handle}: ${err?.message}`));
+        .del(`remote-device:${handle}`));
 }
 
 function associateAppNodes() {
@@ -64,8 +65,16 @@ function disassociateAppNodes() {
   });
 }
 
-function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): RemoteDevice {
+// Armazenamento primeiro: se a gravacao falhar, o dispositivo nao entra na
+// memoria, o WebSocketServer e fechado e o erro sobe.
+async function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): Promise<RemoteDevice> {
   let device = new RemoteDevice(body, handle, wss);
+  try {
+    await storeDevice(device);
+  } catch (err) {
+    device.terminate();
+    throw err;
+  }
   devices.set(handle, device);
 
   let devclass = device.getClass();
@@ -75,31 +84,30 @@ function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): R
     devclasses.set(devclass, [device.getHandle()]);
   }
 
-  storeDevice(device);
   mqttClient.publish(`${TOPICS.devices}/${devclass}`, JSON.stringify(devclasses.get(devclass)), true);
 
   return device;
 }
 
-function removeRemoteDevice(handle: string): boolean {
-  if (!devices.has(handle)) return false;
-
+// Armazenamento primeiro: se a remocao falhar, o dispositivo continua
+// registrado e conectado, e o erro sobe.
+async function removeRemoteDevice(handle: string): Promise<boolean> {
   const dev = devices.get(handle);
-  let devclass = dev?.getClass() as string;
-  dev?.terminate();
+  if (!dev) return false;
+  const devclass = dev.getClass();
+
+  await unstoreDevice(handle, devclass);
+  // outra remocao do mesmo handle (API e fechamento do socket) pode ter
+  // concluido durante a espera
+  if (devices.get(handle) !== dev) return true;
 
   devices.delete(handle);
-  unstoreDevice(handle, devclass);
-  let handles: string[] = devclasses.get(devclass) as string[];
-  devclasses.set(devclass, handles.filter(h => h !== handle));
+  const handles = (devclasses.get(devclass) ?? []).filter(h => h !== handle);
+  devclasses.set(devclass, handles);
+  dev.terminate();
   console.log(`Client ${handle} unregistered.`);
 
-  let content = '';
-  handles = devclasses.get(devclass) as string[];
-  if (handles.length > 0) {
-    content = JSON.stringify(handles);
-  }
-  mqttClient.publish(`${TOPICS.devices}/${devclass}`, content, true);
+  mqttClient.publish(`${TOPICS.devices}/${devclass}`, handles.length > 0 ? JSON.stringify(handles) : '', true);
   return true;
 }
 

@@ -29,17 +29,16 @@ type TokenResponse = {
 // classificado aqui como associado. Mesmo criterio e mesmo risco do plugin
 // da borda (infra/edgegateway/plugin/handler.go); sem mudanca de
 // comportamento.
+// D-0510-6 (reuniao 05/10 com o Joel): falha lendo origins:associated nao
+// vira mais "autonomo" em silencio (classe errada gravada na credencial):
+// o erro sobe e a resposta e 404 {error:200} (errorHandler, C.3.2).
 async function classifyClient(req: Request, pm: string | undefined): Promise<ClientClass> {
     if (pm !== undefined) return 'non-local';
 
     const origin = req.get('Origin');
     if (origin) {
-        try {
-            const scid = await redis.hget('origins:associated', origin);
-            if (scid !== null) return 'local-associated';
-        } catch (err: any) {
-            logger.debug(`classifyClient: falha lendo origins:associated (${err?.message}); assumindo autonomo`);
-        }
+        const scid = await redis.hget('origins:associated', origin);
+        if (scid !== null) return 'local-associated';
     }
     return 'local-autonomous';
 }
@@ -157,13 +156,17 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
 // conformidade com a norma numa leitura da decisao acima feita na
 // implementacao; A CONFIRMAR (Luis). O 102 fica so para a recusa no proprio
 // pop-up ("If the user does not grant access").
+// D-0510-4 (reuniao 05/10 com o Joel): "ja usado" = em clients:authorized,
+// em clients:blocked ou com registro client:{id} (autorizacao anterior ao
+// conjunto); uma leitura so (manager.clientIdStatus).
 async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response): Promise<boolean> {
-    if (await manager.isAuthorized(clientId as string)) {
+    const status = await manager.clientIdStatus(clientId as string);
+    if (status === 'used') {
         returnError(res, 101, 'clientid has been used before (already authorized); retry with a new clientid.');
         return false;
     }
 
-    if (await manager.isBlocked(clientId as string)) {
+    if (status === 'blocked') {
         returnError(res, 101, 'clientid has been used before (blocked by the viewer); retry with a new clientid.');
         return false;
     }

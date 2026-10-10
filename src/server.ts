@@ -5,15 +5,29 @@ import logger from './logger';
 import { assertEnv } from './util';
 dotenv.config();
 
+// USER_DATA_FILE deixou de ser exigido: o tv3ws nao semeia mais perfis
+// (D-0510-5, reuniao 05/10 com o Joel; a carga inicial e do redis).
 assertEnv([
     'MQTT_HOST',
     'REDIS_HOST',
     'JWT_SECRET',
-    'USER_DATA_FILE',
     'USER_THUMBS',
 ]);
 
 import app from './app';
+
+// Redis (D-0510-6): conexao aberta ja no boot, com log explicito de pronto,
+// perda e falha (redis-client.ts). As tarefas de boot que dependem dele rodam
+// no primeiro 'ready'; antes eram promessas soltas disparadas no import.
+import { connectRedis, whenRedisReady } from './redis-client';
+import { clearStoredRegistry } from './modules/remotedevice-manager/manager';
+import { backfillAuthorizedClients } from './modules/auth-manager/manager';
+whenRedisReady('limpeza do espelho de remote-devices', clearStoredRegistry);
+whenRedisReady('clients:authorized a partir de client:*', async () => {
+    const added = await backfillAuthorizedClients();
+    if (added > 0) console.log(`[redis] ${added} cliente(s) antigo(s) incluido(s) em clients:authorized`);
+});
+connectRedis();
 
 // Endereco divulgado pela descoberta SSDP (C.3.4), resolvido uma vez no boot:
 // o /manifest (sempre servido aqui, atras da borda) e o anuncio, quando ligado

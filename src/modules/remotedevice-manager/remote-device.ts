@@ -89,7 +89,10 @@ export default class RemoteDevice {
 
     ws.on("close", () => {
       console.log(`${this.handle} disconnected.`);
-      removeRemoteDevice(this.handle);
+      // sem API para responder: a falha do armazenamento vai para o log
+      // (D-0510-6) em vez de virar rejeicao solta
+      removeRemoteDevice(this.handle).catch((err: Error) =>
+        console.error(`[remote-devices] falha removendo ${this.handle} apos desconexao: ${err?.message}`));
     });
 
     ws.on("message", (message) => this.onWebSocketMessage(message));

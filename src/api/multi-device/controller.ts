@@ -2,7 +2,9 @@ import { Request, Response } from "express";
 import service from "./service";
 import { returnError } from "../../util";
 
-function POSTRemoteDevice(req: Request, res: Response): void {
+// Registro e remocao esperam o armazenamento (D-0510-6): falha do Redis sobe
+// como excecao e o errorHandler responde 404 {error:200}.
+async function POSTRemoteDevice(req: Request, res: Response): Promise<void> {
   const body = req.body;
   if (!body) {
     returnError(res, 105, "request body");
@@ -22,17 +24,17 @@ function POSTRemoteDevice(req: Request, res: Response): void {
     returnError(res, 105, missing.join(", "));
     return;
   }
-  const response = service.createWebSocket(body);
+  const response = await service.createWebSocket(body);
   res.status(200).json(response);
 }
 
-function DELETERemoteDevice(req: Request, res: Response): void {
+async function DELETERemoteDevice(req: Request, res: Response): Promise<void> {
   const handle = req.params.handle;
   if (!handle) {
     returnError(res, 105, "handle");
     return;
   }
-  if (!service.deleteWebSocket(handle)) {
+  if (!(await service.deleteWebSocket(handle))) {
     returnError(res, 101, `handle ${handle} does not exist`);
     return;
   }
