@@ -41,7 +41,9 @@ async function DELETERemoteDevice(req: Request, res: Response): Promise<void> {
   res.status(204).json({});
 }
 
-function GETRemoteDevices(req: Request, res: Response): void {
+// Abrir o ponto de entrada local e assincrono (porta ocupada -> outra porta;
+// esgotadas, 404 {error:200} pelo errorHandler).
+async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
   const classId = req.params["classId"];
   if (!classId) {
     returnError(res, 105, "classId");
@@ -51,7 +53,7 @@ function GETRemoteDevices(req: Request, res: Response): void {
   // 2.1 (proposta do Forum): so handles; a URL vem por GET /device/{handle}.
   const devices = res.locals.apiVersion === '2.1'
     ? service.getRemoteDevices(classId)
-    : service.getRemoteDevicesWithUrl(classId);
+    : await service.getRemoteDevicesWithUrl(classId);
   if (!devices || devices.length === 0) {
     res.status(200).json({});
     return;
@@ -71,7 +73,7 @@ function handleRoutesAreV21(req: Request, res: Response): boolean {
   return true;
 }
 
-function GETRemoteDeviceEntryPoint(req: Request, res: Response): void {
+async function GETRemoteDeviceEntryPoint(req: Request, res: Response): Promise<void> {
   if (!handleRoutesAreV21(req, res)) return;
 
   const handle = req.params.handle;
@@ -80,7 +82,7 @@ function GETRemoteDeviceEntryPoint(req: Request, res: Response): void {
     return;
   }
 
-  const device = service.getRemoteDevice(handle);
+  const device = await service.getRemoteDevice(handle);
   if (!device) {
     returnError(res, 101, `handle ${handle} does not exist`);
     return;

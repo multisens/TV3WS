@@ -17,10 +17,13 @@ import sensoryEffectAPI from './api/sensory-effect';
 // borda (plugin tv30-auth do edgegateway); o tv3ws so recebe e responde. Sob
 // /tv3 resta a negociacao de versao (basic); a emissao de credencial
 // (/tv3/authorize, /tv3/token) continua aqui, em client-identification.
+// A negociacao de versao vem ANTES dos leitores de corpo: o 101 de JSON
+// malformado (errorHandler) tambem leva API-Version (C.3.6.6). Antes, o
+// express.json rejeitava o corpo antes do basic e a resposta saia sem ele.
 const app: Application = express();
+app.use('/tv3', basic);
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use('/tv3', basic);
 
 // routes
 app.use("/health", (req: Request, res: Response) => {

@@ -6,8 +6,25 @@ const router: Router = express.Router();
 // versao da norma e a 2.0 e vale quando o cabecalho falta; a 2.1 preserva a
 // proposta em discussao no Forum (fluxo de remote-device por handle).
 // Cabecalho malformado -> erro 101; versao fora do conjunto -> erro 100.
+//
+// C.3.6.6 (p. 201; p. 219 do PDF): TODA resposta leva API-Version, inclusive
+// a de erro. Na resposta normal (e nos erros das proprias APIs), a versao
+// negociada. No 100 o servidor nao consegue responder na versao pedida, e a
+// norma manda a versao mais recente que ele suporta (LATEST_VERSION, hoje
+// 2.1). No 101 o pedido nao traz versao legivel: vale a da norma, como na
+// falta do cabecalho (C.3.6.5). Leitura feita na implementacao em 10/10;
+// A CONFIRMAR (Luis). A borda tem a mesma negociacao para as rotas dela
+// (apiVersion, infra/edgegateway/plugin/handler.go) e precisa casar com esta.
 const SUPPORTED_VERSIONS = ['2.0', '2.1'];
 const DEFAULT_VERSION = '2.0';
+const LATEST_VERSION = SUPPORTED_VERSIONS.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
+
+// "X.Y" numerico (C.3.6.2): 2.10 e mais recente que 2.9.
+function compareVersions(a: string, b: string): number {
+    const [amaj, amin] = a.split('.').map(Number);
+    const [bmaj, bmin] = b.split('.').map(Number);
+    return amaj !== bmaj ? amaj - bmaj : amin - bmin;
+}
 
 router.use((req: Request, res: Response, next: NextFunction) => {
     // CORS eh tratado pelo KrakenD (gateway). Setar aqui causa duplicacao
@@ -40,11 +57,13 @@ function validateAcceptVersion(req: Request, res: Response): boolean {
     }
 
     if (!/^\d+\.\d+$/.test(requested)) {
+        res.setHeader('API-Version', DEFAULT_VERSION);
         returnError(res, 101, `malformed Accept-Version '${requested}'`);
         return false;
     }
 
     if (!SUPPORTED_VERSIONS.includes(requested)) {
+        res.setHeader('API-Version', LATEST_VERSION);
         returnError(res, 100, `unsupported version '${requested}' (supported: ${SUPPORTED_VERSIONS.join(', ')})`);
         return false;
     }

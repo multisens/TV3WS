@@ -14,6 +14,7 @@ import {
 } from "./types";
 import { WebSocket, WebSocketServer } from "ws";
 import { removeRemoteDevice } from "./manager";
+import { closeEntryPoint } from "./entry-point";
 
 enum InterfaceType {
   area = "area",
@@ -415,17 +416,29 @@ export default class RemoteDevice {
   }
 
   public addLocalEntryPoint(lwss: WebSocketServer): void {
+    if (this.lwss && this.lwss !== lwss) closeEntryPoint(this.lwss);
     this.lwss = lwss;
     lwss.on("connection", (ws) => this.onLocalClientConnection(ws));
   }
 
+  // Desativacao (DELETE /tv3/remote-device/device/{handle}, versao 2.1; a
+  // "C.6.15.7" de api/multi-device/index.ts e numeracao da proposta do Forum,
+  // o PDF da norma vai so ate a C.6.15.5): fecha o ponto de entrada local
+  // inteiro (inclusive o http.Server, que antes ficava escutando) e esquece a
+  // URL, para que uma nova ativacao abra outro em vez de devolver o endereco
+  // morto.
+  // Sem cliente local, as mensagens do dispositivo voltam a ser tratadas
+  // aqui em vez de repassadas.
   public removeLocalEntryPoint(): void {
     if (this.lws) {
       this.lws.close();
     }
     if (this.lwss) {
-      this.lwss.close();
+      closeEntryPoint(this.lwss);
     }
+    this.lws = undefined;
+    this.lwss = undefined;
+    this.bridge = false;
   }
 
   protected onLocalClientConnection(lws: WebSocket): void {
@@ -456,19 +469,17 @@ export default class RemoteDevice {
     }
   }
 
+  // Fecha os dois pontos de entrada com os seus http.Server: antes so o
+  // WebSocketServer era fechado, e a porta sorteada (450xx no compose)
+  // continuava escutando depois do descadastro.
   public terminate(): void {
     if (this.ws) {
       this.ws.close();
     }
-    this.wss.close();
+    closeEntryPoint(this.wss);
     if (this.subscribed) {
       this.removeNode();
     }
-    if (this.lws) {
-      this.lws.close();
-    }
-    if (this.lwss) {
-      this.lwss.close();
-    }
+    this.removeLocalEntryPoint();
   }
 }
