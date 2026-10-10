@@ -5,7 +5,8 @@
 // qualquer classe, sem nova consulta ao espectador (Tabela C.3; C.6.1.4.4).
 // E, da reuniao de 05/10 com o Joel: D-0510-4 (conjunto clients:authorized,
 // coerente com clients:blocked e com o 101) e D-0510-6 (Redis fora do ar da
-// 404 {error:200}, sem travar).
+// 404 {error:200}, sem travar). Rodada de 10/10: PIN do kex com quatro
+// digitos (C.4.3.3).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -25,10 +26,12 @@ const members = (k: string) => [...((store.get(k) as Set<string> | undefined) ??
 // Resposta do "espectador" ao pop-up de autorizacao e contagem de pop-ups.
 let viewerAnswer = true;
 let yesNoPopUps = 0;
+// PINs que o tv3ws mandou a TV mostrar (pm=kex)
+const pins: string[] = [];
 const fakeCore = {
     async showYesNoPopUpAsync(_msg: string, _timeout: number) { yesNoPopUps++; return viewerAnswer; },
     showQRCodePopUp(_key: string, _timeout: number) { /* sem MQTT */ },
-    showPINPopUp(_pin: string, _timeout: number) { /* sem MQTT */ },
+    showPINPopUp(pin: string, _timeout: number) { pins.push(pin); /* sem MQTT */ },
 };
 
 function stub(rel: string, exports: object): void {
@@ -184,7 +187,12 @@ test('nao local (pm=kex): a resposta traz "key" e o cliente deriva o mesmo segre
     assert.equal(serverKey[0], 0x04);
 
     // C.4.3.3: segredo = SHA-256(ECDH)[0:16]; challenge-response da Tabela C.4
-    const secret = sha(ecdh.computeSecret(serverKey)).subarray(0, 16);
+    const hash = sha(ecdh.computeSecret(serverKey));
+    const secret = hash.subarray(0, 16);
+    // C.4.3.3, nota: o PIN mostrado na TV e hash mod 10 000, com quatro digitos
+    const expectedPin = (BigInt('0x' + hash.toString('hex')) % BigInt(10000)).toString().padStart(4, '0');
+    assert.equal(pins[pins.length - 1], expectedPin);
+    assert.match(pins[pins.length - 1], /^\d{4}$/);
     const plain = aes(false, secret, Buffer.from(r.json.challenge, 'base64url'));
     const cr = aes(true, secret, sha(plain)).toString('base64url');
     const tok = await fetch(`${base}/token?${new URLSearchParams({ clientid: cid, 'challenge-response': cr })}`);
@@ -193,6 +201,18 @@ test('nao local (pm=kex): a resposta traz "key" e o cliente deriva o mesmo segre
     const body = JSON.parse(aes(false, secret, Buffer.from(await tok.arrayBuffer())).toString('utf8'));
     assert.equal(typeof body.accessToken, 'string');
     assert.equal(typeof body.refreshToken, 'string');
+});
+
+test('PIN do kex com quatro digitos (C.4.3.3): zeros a esquerda, "0042" e nao "42"', () => {
+    const { pinFromHash } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
+    const hashOf = (n: bigint) => Buffer.from(n.toString(16).padStart(64, '0'), 'hex');   // 32 bytes, como o SHA-256
+    const max = BigInt('0x' + 'f'.repeat(64));
+    assert.equal(pinFromHash(hashOf(BigInt(42))), '0042');
+    assert.equal(pinFromHash(hashOf(BigInt(10042))), '0042');
+    assert.equal(pinFromHash(hashOf(BigInt(7))), '0007');
+    assert.equal(pinFromHash(hashOf(BigInt(0))), '0000');
+    assert.equal(pinFromHash(hashOf(BigInt(9999))), '9999');
+    assert.equal(pinFromHash(hashOf(max)), (max % BigInt(10000)).toString().padStart(4, '0'));
 });
 
 test('nao local (pm=qrcode): a resposta nao traz "key"', async () => {

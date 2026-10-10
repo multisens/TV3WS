@@ -27,6 +27,14 @@ function generateQRCodeSecret(client: Client): Buffer<ArrayBufferLike> {
     return secret;
 }
 
+// C.4.3.3, passo 2 e nota (p. 211; p. 229 do PDF): o PIN e o resto da divisao
+// do hash por 10 000, "a four-digit number". Sai com os zeros a esquerda
+// ("0042"); antes saia "42", e o espectador via um PIN de dois digitos.
+export function pinFromHash(hash: Buffer): string {
+    const pin = BigInt('0x' + hash.toString('hex')) % BigInt(10000);
+    return pin.toString().padStart(4, '0');
+}
+
 function generatePINSecret(client: Client, key: string): Buffer<ArrayBufferLike> {
     // Generate the ECDH key pair
     const [privateKey, publicKey] = createECDHKeys();
@@ -38,10 +46,7 @@ function generatePINSecret(client: Client, key: string): Buffer<ArrayBufferLike>
     simm_key = sha256Encrypt(simm_key);
     
     // Use key to create PIN
-    const bigIntKey = BigInt('0x' + simm_key.toString('hex'));
-    const bigInt10k = BigInt(10000);
-    const pin = Number(bigIntKey % bigInt10k);
-    core.showPINPopUp(pin.toString(), 1000);
+    core.showPINPopUp(pinFromHash(simm_key), 1000);
 
     // Applies SHA-256 to key and get the 128 most significative bits
     const secret = simm_key.subarray(0, 16);
