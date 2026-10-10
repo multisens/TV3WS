@@ -98,7 +98,7 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
             // chave parcial do servidor (ponto SEC 1 sem compressao em
             // base64url, C.4.3.4). Sem ela o cliente nao deriva a chave
             // simetrica e nao resolve o challenge. Correcao de conformidade
-            // feita na integracao de 04/10; A CONFIRMAR (Luis).
+            // feita na integracao de 04/10; CONFIRMADA na reuniao de 05/10.
             res.status(200).json({
                 challenge,
                 key: base64UrlEncode(client.getECDHPublicKey())
@@ -154,7 +154,7 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
 // pela nota da mesma Tabela C.3 ("any attempt to authorize immediately
 // returns error 101, without displaying the authorization dialog"). Eh
 // conformidade com a norma numa leitura da decisao acima feita na
-// implementacao; A CONFIRMAR (Luis). O 102 fica so para a recusa no proprio
+// implementacao; CONFIRMADA na reuniao de 05/10. O 102 fica so para a recusa no proprio
 // pop-up ("If the user does not grant access").
 // D-0510-4 (reuniao 05/10 com o Joel): "ja usado" = em clients:authorized,
 // em clients:blocked ou com registro client:{id} (autorizacao anterior ao
