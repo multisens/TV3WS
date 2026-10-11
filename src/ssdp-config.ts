@@ -8,9 +8,11 @@ import { getLocalIP } from './util/networking';
 // pela norma para o Server-BaseURL — e Server-SecureBaseURL a 44643, e nao
 // HTTP_PORT/HTTPS_PORT do tv3ws (44652/44653 no container, nao publicadas).
 // L6 decidida = opcao A (Luis, 09/10): no compose, quem anuncia e a borda, em
-// rede do host (infra/edgegateway/ssdp, em Go, com a MESMA regra deste
-// modulo), e o /manifest fica no tv3ws (src/manifest.ts). Este modulo serve ao
-// /manifest e ao anuncio do tv3ws rodando sozinho no host (dev-host).
+// rede do host (infra/edgegateway/ssdp, em Go), e o /manifest fica no tv3ws
+// (src/manifest.ts). Este modulo serve ao /manifest e ao anuncio do tv3ws
+// rodando sozinho no host (dev-host). A regra de host daqui (abaixo) nao muda
+// com a decisao do Luis em 11/10 (B2); a da borda deixou de ser a mesma: com o
+// anuncio ligado, ela exige SSDP_ADVERTISE_HOST e nao cai no SERVER_URL.
 
 export const SSDP_ST = 'urn:schemas-sbtvd-org:service:TV3.0WebServices:1';
 
