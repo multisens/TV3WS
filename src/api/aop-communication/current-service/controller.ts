@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import core from '../../../core';
 import { returnError } from '../../../util';
+import { integerServiceId } from '../../../util/service-id';
 
 // As rotas de teste GET /authorize e GET /token que viviam aqui sobrepunham
 // (por ordem de montagem) a implementacao real de apis/access — desafio
@@ -50,14 +51,8 @@ function GETCurrentService(req: Request, res: Response): void {
 	res.status(200).json(body);
 }
 
-// Inteiro nao negativo, em numero ou em texto so de digitos (o JSON de
-// aop/services nao tem esquema); qualquer outra coisa (o -1 inicial,
-// undefined, null) -> sem valor.
-function integerServiceId(raw: unknown): number | undefined {
-	if (typeof raw === 'number') return Number.isInteger(raw) && raw >= 0 ? raw : undefined;
-	if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
-	return undefined;
-}
+// (integerServiceId foi para ../../../util/service-id.ts em 10/10, P4: o
+// core.ts usa a mesma regra no hash session:current-service.)
 
 
 export default { GETCurrentService }

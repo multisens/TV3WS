@@ -3,6 +3,15 @@
 // Redis fora do ar: comando avulso REJEITA; pipeline RESOLVE com [erro, null]
 // em cada entrada; MULTI rejeita no EXEC. setDown(true, 'batches') derruba so
 // pipeline/MULTI (para exercitar o tratamento do resultado por entrada).
+//
+// P4 (Luis, 10/10): as escritas do tv3ws nas familias do alcance sao
+// call('FCALL', <funcao tv30>, 0, ...args) (src/redis-funcoes.ts). O duble
+// imita o EFEITO de cada funcao usada pelo tv3ws, sem conferir o esquema — a
+// conferencia e testada no Redis real (infra/redis/test/funcoes.test.js) e
+// o contrato adaptador x funcao em infra/redis/test/contrato.test.js.
+// recusar(funcao, mensagem) faz a funcao responder como o Redis responde a
+// dado fora do esquema (erro TV30ESQUEMA), para testar o caminho de falha;
+// fcalls guarda cada chamada [funcao, ...args].
 type Value = string | Set<string> | Record<string, string>;
 
 export const FAKE_REDIS_ERROR = 'redis indisponivel (duble de teste)';
@@ -11,6 +20,8 @@ export function createFakeRedis() {
     const store = new Map<string, Value>();
     let down = false;
     let singleDown = false;
+    const recusas = new Map<string, string>();
+    const fcalls: string[][] = [];
 
     const hash = (k: string): Record<string, string> | undefined => {
         const v = store.get(k);
@@ -58,10 +69,51 @@ export function createFakeRedis() {
         keys: (p: string) => [...store.keys()].filter(k => glob(p).test(k)),
         // varredura numa passada so (cursor '0' de volta)
         scan: (_cursor: string, _m: string, p: string) => ['0', [...store.keys()].filter(k => glob(p).test(k))] as [string, string[]],
-        // so o script ADD_UNLESS_BLOCKED do auth-manager
-        eval: (script: string, _n: number, k1: string, k2: string, member: string) => {
-            if (!/SISMEMBER[\s\S]*SADD/.test(script)) throw new Error('eval: script nao suportado pelo duble');
-            return ops.sismember(k2, member) === 0 ? ops.sadd(k1, member) : 0;
+        // so FCALL <funcao> 0 ...args (ver funcoes abaixo)
+        call: (cmd: string, nome: string, numkeys: number | string, ...args: string[]) => {
+            if (String(cmd).toUpperCase() !== 'FCALL') throw new Error(`call: comando ${cmd} nao suportado pelo duble`);
+            if (Number(numkeys) !== 0) throw new Error(`TV30ESQUEMA ${nome}: chamada com numkeys ${numkeys}`);
+            fcalls.push([nome, ...args.map(String)]);
+            const recusa = recusas.get(nome);
+            if (recusa !== undefined) throw new Error(recusa);
+            const f = funcoes[nome];
+            if (!f) throw new Error('ERR Function not found');
+            return f(args.map(String));
+        },
+    };
+
+    // pares campo valor a partir de args[i]
+    const paresDe = (a: string[], i = 0): Record<string, string> => {
+        const h: Record<string, string> = {};
+        for (let k = i; k + 1 < a.length; k += 2) h[a[k]] = a[k + 1];
+        return h;
+    };
+    // efeito das funcoes tv30 que o tv3ws chama (infra/redis/funcoes.lua)
+    const funcoes: Record<string, (a: string[]) => unknown> = {
+        tv30_sessao_usuario: ([v]) => { store.set('session:current-user', v); return 1; },
+        tv30_sessao_servico_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
+        tv30_sessao_servico: (a) => { store.set('session:current-service', paresDe(a)); return 1; },
+        tv30_atributos_emissora: ([id, scid, ...a]) => {
+            if (!set('users:index')?.has(id)) throw new Error(`TV30ESQUEMA tv30_atributos_emissora: user:${id}:broadcaster-attrs:${scid} perfil "${id}" fora de users:index (invariante perfil-dependentes)`);
+            const k = `user:${id}:broadcaster-attrs:${scid}`;
+            const h = { ...(hash(k) ?? {}) };
+            const pedidos = paresDe(a);
+            for (const [f, v] of Object.entries(pedidos)) { if (v === '') delete h[f]; else h[f] = v; }
+            if (Object.keys(h).length) store.set(k, h); else store.delete(k);
+            return Object.keys(pedidos).length;
+        },
+        tv30_cliente_grava: ([id, ...a]) => { ops.hset(`client:${id}`, paresDe(a)); return 1; },
+        tv30_cliente_autoriza: ([id, ...a]) => {
+            ops.hset(`client:${id}`, paresDe(a));
+            ops.srem('clients:blocked', id);
+            ops.sadd('clients:authorized', id);
+            return 1;
+        },
+        tv30_cliente_bloqueia: ([id]) => { ops.srem('clients:authorized', id); ops.sadd('clients:blocked', id); return 1; },
+        tv30_cliente_inclui_autorizado: ([id]) => {
+            if (set('clients:blocked')?.has(id)) return 0;
+            if (!hash(`client:${id}`)) throw new Error(`TV30ESQUEMA tv30_cliente_inclui_autorizado: client:${id} ausente (invariante autorizado-tem-registro)`);
+            return ops.sadd('clients:authorized', id);
         },
     };
     type OpName = keyof typeof ops;
@@ -96,9 +148,15 @@ export function createFakeRedis() {
     return {
         redis: client as any,
         store,
+        fcalls,
         setDown(v: boolean, scope: 'all' | 'batches' = 'all') {
             down = v;
             singleDown = v && scope === 'all';
+        },
+        // mensagem = recusa da funcao como o Redis a manda; undefined = volta ao normal
+        recusar(nome: string, mensagem?: string) {
+            if (mensagem === undefined) recusas.delete(nome);
+            else recusas.set(nome, mensagem);
         },
     };
 }

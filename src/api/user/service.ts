@@ -3,6 +3,7 @@ import fs from 'fs';
 import mqttClient, { TOPICS } from '../../mqtt-client';
 import path from 'path';
 import redis from '../../redis-client';
+import * as funcoes from '../../redis-funcoes';
 import { ApiError, execOrThrow } from '../../util';
 import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
@@ -54,12 +55,16 @@ async function resolveActiveService(): Promise<string> {
 // provisiona o banco vazio. Este servico so LE perfis: sairam daqui o
 // syncUsersFromFile (aop/users e semeadura no boot com USER_DATA_FILE) e a
 // escrita do lastAccess. Resta a sessao (session:*), espelho dos topicos.
+// P4 (Luis, 10/10): a escrita passa pelas funcoes do Redis
+// (../../redis-funcoes.ts), que conferem o esquema; valor fora dele (ex.: id
+// com mais de 64 caracteres, o mesmo teto do topico no broker) e recusado e o
+// handler MQTT loga a falha.
 async function updateCurrentUser(m: string): Promise<void> {
-    await redis.set(KEY_CURRENT_USER, m);
+    await funcoes.sessaoUsuario(m);
 }
 
 async function updateCurrentService(m: string): Promise<void> {
-    await redis.set(KEY_CURRENT_SERVICE, m);
+    await funcoes.sessaoServicoId(m);
 }
 
 mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
@@ -102,7 +107,7 @@ async function getCurrentUser(): Promise<string> {
 // C.6.14.4: o lastAccess do perfil (despejo P3) e gravado pela plataforma ao
 // receber aop/currentUser (D-0510-5), nao aqui.
 async function setCurrentUser(uuid: string): Promise<void> {
-    await redis.set(KEY_CURRENT_USER, uuid);
+    await funcoes.sessaoUsuario(uuid);
     mqttClient.publish(TOPICS.current_user, uuid, true);
 }
 
@@ -264,7 +269,10 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
         if (val === '') toDel.push(k); else toSet[k] = val;
     }
 
-    // quota da area privativa (P3): mede o hash resultante antes de gravar
+    // quota da area privativa (P3): mede o hash resultante antes de gravar,
+    // para responder com a mensagem da quota. A funcao do Redis confere o
+    // mesmo teto de novo no resultado, ja de forma atomica (o HGETALL daqui e
+    // a gravacao nao sao uma operacao so).
     const current = await redis.hgetall(key);
     const merged: Record<string, string> = { ...current, ...toSet };
     toDel.forEach(k => delete merged[k]);
@@ -273,8 +281,12 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
         throw new ApiError(200, `private data quota (20 MB) exceeded for this profile and service context`);
     }
 
-    if (toDel.length > 0) await redis.hdel(key, ...toDel);
-    if (Object.keys(toSet).length > 0) await redis.hset(key, toSet);
+    // P4 (Luis, 10/10): HDEL dos vazios e HSET dos demais numa funcao so
+    // (tv30_atributos_emissora), que confere o esquema: perfil em users:index,
+    // nome nao vazio e fora dos basicos protegidos, teto de 20 MB.
+    // PENDENTE (Joel): E4 — esta familia tem dois escritores (aqui e o despejo
+    // do AoP); a funcao nao decide o dono.
+    await funcoes.atributosEmissora(uuid, scid, changed);
     return changed;
 }
 
