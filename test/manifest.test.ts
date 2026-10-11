@@ -43,6 +43,20 @@ test('/manifest aponta para a borda (44642/44643) no host configurado', () => {
     assert.equal(headers['Device-FriendlyName'], 'TV 3.0 Receiver');
 });
 
+// B3 (decisao do Luis em 11/10): o navegador so deixa o JavaScript de outra
+// origem ler os cabecalhos listados em Access-Control-Expose-Headers.
+test('/manifest expoe ao navegador exatamente os cabecalhos Server-* e Device-* que envia', () => {
+    const { headers } = call({ SERVER_URL: '192.168.1.150' });
+    const exposed = (headers['Access-Control-Expose-Headers'] || '').split(',').map(s => s.trim());
+    const sent = Object.keys(headers).filter(k => k !== 'Access-Control-Expose-Headers');
+    assert.deepEqual(exposed, ['Server-BaseURL', 'Server-SecureBaseURL', 'Server-PairingMethods',
+        'Device-BrandName', 'Device-Model', 'Device-FriendlyName']);
+    assert.deepEqual([...sent].sort(), [...exposed].sort(), 'todo cabecalho enviado esta na lista, e so eles');
+    assert.ok(sent.every(k => /^(Server|Device)-/.test(k)));
+    // a borda define o Access-Control-Allow-Origin; duplicado, o Chrome recusa
+    assert.equal(headers['Access-Control-Allow-Origin'], undefined);
+});
+
 test('/manifest usa SSDP_ADVERTISE_HOST, as portas da borda e os metadados do ambiente', () => {
     const { headers } = call({
         SSDP_ADVERTISE_HOST: '10.1.2.3', SERVER_URL: 'localhost', EDGE_HTTP_PORT: '8080', EDGE_HTTPS_PORT: '8443',
