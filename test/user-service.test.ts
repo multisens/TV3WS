@@ -145,3 +145,58 @@ test('Redis fora do ar: current-user e atributos respondem 404 {error:200}', asy
         expectError(await call('GET', '/svc-a/users/u1'), 200);
     } finally { fake.setDown(false); }
 });
+
+// --- P4 (Luis, 10/10): escritas pelas funcoes do Redis -----------------------------
+test('escritas da sessao saem por FCALL (tv30_sessao_usuario, tv30_sessao_servico_id)', async () => {
+    fake.fcalls.length = 0;
+    await handlers.get('aop/currentUser')!('u9');
+    await handlers.get('aop/currentService')!('svc-z');
+    seedProfiles('svc-a');
+    assert.equal((await call('POST', '/current-service/users/current-user', { id: 'u1' })).status, 200);
+    assert.deepEqual(fake.fcalls, [['tv30_sessao_usuario', 'u9'], ['tv30_sessao_servico_id', 'svc-z'], ['tv30_sessao_usuario', 'u1']]);
+});
+
+test('C.6.14.5 pela funcao tv30_atributos_emissora: grava, vazio remove, resposta com o alterado', async () => {
+    seedProfiles('svc-a');
+    fake.fcalls.length = 0;
+    let r = await call('POST', '/svc-a/users/u1', { cor: 'azul', tam: 'G' });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json, { cor: 'azul', tam: 'G' });
+    r = await call('POST', '/svc-a/users/u1', { cor: '' });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(store.get('user:u1:broadcaster-attrs:svc-a'), { tam: 'G' });
+    assert.deepEqual(fake.fcalls, [['tv30_atributos_emissora', 'u1', 'svc-a', 'cor', 'azul', 'tam', 'G'], ['tv30_atributos_emissora', 'u1', 'svc-a', 'cor', '']]);
+    // basico protegido: 101 do tv3ws, sem chegar a funcao
+    fake.fcalls.length = 0;
+    expectError(await call('POST', '/svc-a/users/u1', { nickname: 'x' }), 101);
+    assert.deepEqual(fake.fcalls, []);
+});
+
+test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com a mensagem e loga; handler MQTT loga', async () => {
+    seedProfiles('svc-a');
+    const logs: string[] = [];
+    const errorOrig = console.error;
+    console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
+    const msg = 'TV30ESQUEMA tv30_sessao_usuario: session:current-user valor: tem 65 caracteres, maximo 64';
+    fake.recusar('tv30_sessao_usuario', msg);
+    const publicados = published.length;
+    try {
+        const r = await call('POST', '/current-service/users/current-user', { id: 'u1' });
+        expectError(r, 200);
+        assert.ok(r.json.description.includes(msg), r.json.description);
+        assert.ok(logs.some(l => l.includes(msg)), 'errorHandler loga a mensagem');
+        assert.equal(published.length, publicados, 'nao publica o que nao gravou');
+        await assert.rejects(Promise.resolve(handlers.get('aop/currentUser')!('x'.repeat(65))), { message: msg });
+    } finally {
+        fake.recusar('tv30_sessao_usuario');
+        console.error = errorOrig;
+    }
+    fake.recusar('tv30_atributos_emissora', 'TV30ESQUEMA tv30_atributos_emissora: user:u1:broadcaster-attrs:svc-a perfil "u1" fora de users:index (invariante perfil-dependentes)');
+    console.error = () => undefined;
+    try {
+        expectError(await call('POST', '/svc-a/users/u1', { cor: 'azul' }), 200);
+    } finally {
+        fake.recusar('tv30_atributos_emissora');
+        console.error = errorOrig;
+    }
+});

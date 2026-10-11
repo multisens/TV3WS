@@ -34,10 +34,16 @@ const ACCESS_TOKEN_TTL = 24 * 60 * 60;
 // D-0510-4 (reuniao 05/10 com o Joel): os AUTORIZADOS tambem ficam num
 // conjunto, base da futura tela de gerenciamento (o espectador bloqueia e
 // desbloqueia). Invariante: um clientid esta em no maximo um dos dois
-// conjuntos — autorizar e bloquear sao transacoes (MULTI). O Map em memoria
-// e so cache do objeto vivo, que carrega tambem o material efemero de
-// pareamento (secret/challenge/ECDH), valido apenas durante o handshake.
+// conjuntos. O Map em memoria e so cache do objeto vivo, que carrega tambem o
+// material efemero de pareamento (secret/challenge/ECDH), valido apenas
+// durante o handshake.
+// P4 (Luis, 10/10): toda escrita destas chaves passa pelas funcoes do Redis
+// (../../redis-funcoes.ts): autorizar e bloquear sao UMA funcao cada (antes,
+// transacoes MULTI), que tambem confere o esquema do client:{id} (classe,
+// refreshToken) e mantem a invariante; a inclusao do boot tambem (antes, um
+// script EVAL daqui).
 import redis from '../../redis-client';
+import * as funcoes from '../../redis-funcoes';
 
 const clientKey = (id: string) => `client:${id}`;
 const AUTHORIZED_KEY = 'clients:authorized';
@@ -55,7 +61,7 @@ function clientFields(client: Client): Record<string, string> {
 }
 
 async function persistClient(client: Client): Promise<void> {
-    await redis.hset(clientKey(client.getId()), clientFields(client));
+    await funcoes.clienteGrava(client.getId(), clientFields(client));
 }
 
 // Autorizado = membro de clients:authorized. O conjunto (e nao o cache em
@@ -83,10 +89,7 @@ export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
 
 export async function AuthorizeClient(id: string, clientClass: ClientClass = 'local-autonomous'): Promise<void> {
     const client = new Client(id, clientClass);
-    await execOrThrow(redis.multi()
-        .hset(clientKey(id), clientFields(client))
-        .srem(BLOCKED_KEY, id)
-        .sadd(AUTHORIZED_KEY, id));
+    await funcoes.clienteAutoriza(id, clientFields(client));
     authorizedClients.set(id, client);
 }
 
@@ -99,9 +102,7 @@ export async function AuthorizeClient(id: string, clientClass: ClientClass = 'lo
 // futura tela.
 export async function BlockClient(id: string): Promise<void> {
     authorizedClients.delete(id);
-    await execOrThrow(redis.multi()
-        .srem(AUTHORIZED_KEY, id)
-        .sadd(BLOCKED_KEY, id));
+    await funcoes.clienteBloqueia(id);
 }
 
 // Base da futura tela de gerenciamento (D-0510-4): so leitura, sem UI.
@@ -115,13 +116,9 @@ export async function listBlockedClients(): Promise<string[]> {
 
 // Clientes autorizados antes do conjunto clients:authorized existir so tem
 // client:{id}. Roda uma vez no boot (server.ts): poe no conjunto todo
-// client:{id} que nao esteja bloqueado. O teste-e-insercao e atomico (Lua)
-// para nao furar a invariante se um bloqueio acontecer no meio.
-const ADD_UNLESS_BLOCKED = `if redis.call('SISMEMBER', KEYS[2], ARGV[1]) == 0 then
-  return redis.call('SADD', KEYS[1], ARGV[1])
-end
-return 0`;
-
+// client:{id} que nao esteja bloqueado. O teste-e-insercao e atomico (funcao
+// tv30_cliente_inclui_autorizado; antes, script EVAL) para nao furar a
+// invariante se um bloqueio acontecer no meio.
 export async function backfillAuthorizedClients(): Promise<number> {
     let cursor = '0';
     let added = 0;
@@ -130,7 +127,7 @@ export async function backfillAuthorizedClients(): Promise<number> {
         cursor = next;
         for (const key of keys) {
             const id = key.slice('client:'.length);
-            added += Number(await redis.eval(ADD_UNLESS_BLOCKED, 2, AUTHORIZED_KEY, BLOCKED_KEY, id));
+            added += await funcoes.clienteIncluiAutorizado(id);
         }
     } while (cursor !== '0');
     return added;

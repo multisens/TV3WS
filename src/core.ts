@@ -4,7 +4,8 @@ import logger from './logger';
 import mqttClient, { TOPICS, client } from "./mqtt-client";
 import { AppNode } from "./modules/remotedevice-manager/remote-device";
 import { associateAppNodes, disassociateAppNodes } from "./modules/remotedevice-manager/manager";
-import redis from './redis-client';
+import * as funcoes from './redis-funcoes';
+import { integerServiceId } from './util/service-id';
 dotenv.config();
 
 type CoreData = {
@@ -156,9 +157,14 @@ function currentService(sid: string): void {
   data.current.serviceId = data.services[Number(sid)]?.serviceId;
   data.current.serviceName = data.services[Number(sid)]?.serviceName;
 
-  redis.hset('session:current-service', {
+  // P4 (Luis, 10/10): regravado inteiro pela funcao tv30_sessao_servico, que
+  // confere o esquema (infra/redis/esquema.json). serviceId so inteiro em
+  // decimal ou vazio (Tabela C.8; mesma regra da resposta da C.6.3.1): antes
+  // ia o texto que viesse em aop/services ("-1", "1.5"...).
+  const serviceId = integerServiceId(data.current.serviceId);
+  funcoes.sessaoServico({
     serviceContextId: data.current.serviceContextId,
-    serviceId: String(data.current.serviceId ?? ''),
+    serviceId: serviceId === undefined ? '' : String(serviceId),
     serviceName: data.current.serviceName ?? '',
     transportStreamId: data.current.transportStreamId,
     originalNetworkId: data.current.originalNetworkId,

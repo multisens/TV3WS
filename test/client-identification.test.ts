@@ -277,6 +277,47 @@ test('cliente anterior ao conjunto (so client:{id}): reuso da 101 e a migracao d
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
 });
 
+// --- P4 (Luis, 10/10): escritas de cliente pelas funcoes do Redis --------------------
+test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das funcoes tv30_cliente_*', async () => {
+    viewerAnswer = true;
+    const cid = randomUUID();
+    fake.fcalls.length = 0;
+    const first = await authorize(cid);
+    assert.equal(first.status, 200);
+    const tok = await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken });
+    assert.equal(tok.status, 200, JSON.stringify(tok.json));
+    const nomes = fake.fcalls.map(c => c[0]);
+    assert.deepEqual(nomes.filter(n => n === 'tv30_cliente_autoriza').length, 1);
+    assert.ok(nomes.includes('tv30_cliente_grava'), 'rotacao/emissao gravam client:{id} pela funcao');
+    const autoriza = fake.fcalls.find(c => c[0] === 'tv30_cliente_autoriza')!;
+    assert.equal(autoriza[1], cid);
+    assert.deepEqual(autoriza.slice(2).filter((_, i) => i % 2 === 0), ['class', 'refreshToken'], 'campos em ordem estavel, sem accessToken antes do /token');
+
+    viewerAnswer = false;
+    const no = randomUUID();
+    fake.fcalls.length = 0;
+    expectError(await authorize(no), 102);
+    assert.deepEqual(fake.fcalls, [['tv30_cliente_bloqueia', no]]);
+});
+
+test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora de clients:authorized', async () => {
+    viewerAnswer = true;
+    const cid = randomUUID();
+    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: client:x campo class: deve ser um de local-associated, local-autonomous, non-local';
+    fake.recusar('tv30_cliente_autoriza', msg);
+    const errorOrig = console.error;
+    console.error = () => undefined;
+    try {
+        const r = await authorize(cid);
+        expectError(r, 200);
+        assert.ok(r.json.description.includes(msg), r.json.description);
+    } finally {
+        fake.recusar('tv30_cliente_autoriza');
+        console.error = errorOrig;
+    }
+    assert.ok(!members('clients:authorized').includes(cid));
+});
+
 // --- D-0510-6: Redis fora do ar ----------------------------------------------------
 test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-up', async () => {
     viewerAnswer = true;

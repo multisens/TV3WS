@@ -93,3 +93,42 @@ test('a plataforma desfaz a selecao (aop/currentService vazio): volta o 300', as
     assert.equal(r.status, 404);
     assert.equal(r.json.error, 300, JSON.stringify(r.json));
 });
+
+// P4 (Luis, 10/10): o hash session:current-service sai pela funcao
+// tv30_sessao_servico, com os cinco campos e serviceId so inteiro em decimal
+// ou vazio (esquema do Redis); antes ia o texto que viesse em aop/services.
+test('session:current-service pela funcao: cinco campos, serviceId inteiro ou vazio', async () => {
+    const tick = () => new Promise(r => setImmediate(r));
+    await mqtt.deliver(TOPICS.current_service, '');
+    await mqtt.deliver(TOPICS.services, JSON.stringify([
+        { serviceId: 101, serviceName: 'Zero' }, { serviceId: '007', serviceName: 'Um' },
+        { serviceId: -1, serviceName: 'Dois' }, { serviceId: 'abc', serviceName: 'Tres' }, { serviceId: 1.5, serviceName: 'Quatro' },
+    ]));
+    const esperado = ['101', '7', '', '', ''];
+    for (let i = 0; i < esperado.length; i++) {
+        fake.fcalls.length = 0;
+        await mqtt.deliver(TOPICS.current_service, String(i));
+        await tick();
+        const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_sessao_servico');
+        assert.equal(chamadas.length, 1, `uma chamada para o servico ${i}`);
+        const h = fake.store.get('session:current-service') as Record<string, string>;
+        assert.deepEqual(Object.keys(h).sort(), ['originalNetworkId', 'serviceContextId', 'serviceId', 'serviceName', 'transportStreamId']);
+        assert.equal(h.serviceId, esperado[i], `serviceId do servico ${i}`);
+    }
+    // a funcao recusa (dado fora do esquema): o handler loga e segue de pe
+    const logs: string[] = [];
+    const [logOrig, errorOrig] = [console.log, console.error];
+    console.log = console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
+    fake.recusar('tv30_sessao_servico', 'TV30ESQUEMA tv30_sessao_servico: session:current-service campo serviceName: teste');
+    try {
+        await mqtt.deliver(TOPICS.current_service, '0');
+        await tick();
+        await tick();
+    } finally {
+        fake.recusar('tv30_sessao_servico');
+        [console.log, console.error] = [logOrig, errorOrig];
+    }
+    assert.ok(logs.some(l => l.includes('session:current-service') && l.includes('TV30ESQUEMA')), `recusa logada: ${logs.join(' | ')}`);
+    assert.equal((await get()).status, 200, 'a API do servico corrente segue respondendo da memoria');
+    await mqtt.deliver(TOPICS.current_service, '');
+});
