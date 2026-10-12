@@ -304,7 +304,60 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
     // PENDENTE (Joel): E4 — esta familia tem dois escritores (aqui e o despejo
     // do AoP); a funcao nao decide o dono.
     await funcoes.atributosEmissora(uuid, scid, changed);
+
+    // G9 (decisao do Luis em 12/10): aviso ao espectador depois da gravacao
+    // bem-sucedida, so quando algum valor mudou de fato (ver notifyUserOfWrite).
+    // Gravacao recusada ou com erro sobe acima e nao avisa.
+    if (attributesChanged(current, toSet, toDel)) {
+        await notifyUserOfWrite(uuid, scid);
+    }
     return changed;
+}
+
+
+// --- Aviso ao usuario (C.6.14.5) ---
+
+// G9 (decisao do Luis em 12/10). Tabela C.72 (p. 332; p. 350 do PDF),
+// "Restrictions": "it is necessary to notify the user that the application
+// wants to change/add the attribute". O tv3ws publica um aviso informativo na
+// camada grafica do AoP (aop/public/js/popup.js, tipo 'info'): so informa,
+// depois de gravar; nao pede confirmacao antes. Nao retido (um aviso velho nao
+// volta quando a pagina da TV reconecta).
+export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
+export const INFO_POPUP_TIMEOUT_MS = 5000;
+
+// Algum valor mudou? Gravar o mesmo valor ou remover atributo que nao existe
+// nao muda nada e nao avisa. O estado anterior e o HGETALL feito antes da
+// gravacao (para a quota), que nao e atomico com ela: uma escrita concorrente
+// no meio pode fazer o aviso sair (ou nao) pela comparacao com o estado lido.
+function attributesChanged(before: Record<string, string>, toSet: Record<string, string>, toDel: string[]): boolean {
+    return Object.entries(toSet).some(([k, v]) => before[k] !== v) || toDel.some(k => k in before);
+}
+
+// Texto: "A emissora <servico> atualizou os dados do perfil <apelido>.".
+// - servico: o serviceName do servico corrente (session:current-service,
+//   Tabela C.8; o mesmo que a C.6.3.1 responde) quando a gravacao e no
+//   contexto do servico corrente; sem nome (o testbed nao publica
+//   aop/services, e o nome fica vazio) ou com outro <service-context-id>, o
+//   id do servico da gravacao;
+// - apelido: o nickname do perfil (user:{id}); sem ele, "...do perfil.".
+// Falha ao montar ou publicar o aviso vai para o log: os atributos ja foram
+// gravados, e a resposta da API continua a de sucesso.
+async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
+    try {
+        const [nickname, currentService] = await Promise.all([
+            redis.hget(`user:${uuid}`, 'nickname'),
+            readCurrentService(),
+        ]);
+        const serviceName = scid === currentService ? await redis.hget('session:current-service', 'serviceName') : null;
+        const broadcaster = serviceName || scid;
+        const value = nickname
+            ? `A emissora ${broadcaster} atualizou os dados do perfil ${nickname}.`
+            : `A emissora ${broadcaster} atualizou os dados do perfil.`;
+        mqttClient.publish(INFO_POPUP_TOPIC, JSON.stringify({ value, timeout: INFO_POPUP_TIMEOUT_MS }), false);
+    } catch (err) {
+        console.error(`[C.6.14.5] atributos de ${uuid} gravados, mas o aviso ao usuario nao saiu: ${(err as Error)?.message}`);
+    }
 }
 
 
@@ -317,9 +370,12 @@ type FileData = { size: number; mime: string; name: string; file: string };
 // (regras em ../../util/safe-path.ts). Antes, path.join(USER_THUMBS, path)
 // lia qualquer arquivo que o processo alcancasse, desde que o mesmo texto
 // estivesse no campo avatar de um perfil com consentimento para o servico
-// (checkConsent) — e o avatar e gravado pela plataforma sem conferencia de
+// (checkConsent) — e o avatar era gravado pela plataforma sem conferencia de
 // formato (aop/src/modules/profile-manager/service.js, createProfile, a
-// partir do corpo do POST /profile/create). undefined = recusado,
+// partir do corpo do POST /profile/create). Desde a decisao do Luis em 12/10
+// (G8), o avatar e o nome de um arquivo deste diretorio, que a plataforma
+// gera (<id do perfil>.svg); a conferencia daqui continua valendo para
+// qualquer valor do campo. undefined = recusado,
 // inexistente ou que nao e arquivo: o controller responde 305 (Tabela C.73,
 // p. 333; p. 351 do PDF: "305: If a non-existent <path> is specified in the
 // receiver"); antes, o inexistente dava 404 {error:200} (ENOENT).
@@ -338,10 +394,24 @@ function getFile(fpath: string): FileData | undefined {
     };
 }
 
+// Tabela C.73 (p. 333; p. 351 do PDF): "the value of the Content-Type header
+// shall be defined according to the MIME type of the file (derived from its
+// extension, considering the MIME types supported by TV 3.0 AoP)". G8
+// (decisao do Luis em 12/10): as extensoes do nome do avatar (svg, png, jpg,
+// jpeg, webp; aop/src/modules/profile-manager/avatar.js); antes, o SVG que o
+// AoP passou a gravar saia como application/octet-stream e o webp tambem. O
+// resto segue application/octet-stream, como a C.6.4.7 manda quando o tipo
+// nao e conhecido (Tabela C.17, p. 231; p. 249 do PDF).
+const MIME_BY_EXT: Record<string, string> = {
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+};
+
 function getMime(ext: string): string {
-    if (ext === '.jpeg' || ext === '.jpg') return 'image/jpeg';
-    if (ext === '.png') return 'image/png';
-    return 'application/octet-stream';
+    return MIME_BY_EXT[ext.toLowerCase()] ?? 'application/octet-stream';
 }
 
 
