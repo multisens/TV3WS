@@ -5,7 +5,7 @@ import redis from './redis-client';
 // clients:authorized, clients:blocked e user:{id}:broadcaster-attrs:{scid}).
 // Cada escrita e uma chamada FCALL a uma funcao da biblioteca "tv30" do
 // Redis (infra/redis/funcoes.lua), que confere o esquema
-// (infra/redis/esquema.json, a fonte de verdade) e grava de forma atomica,
+// (declarado em infra/redis/esquema.json) e grava de forma atomica,
 // inclusive as invariantes entre chaves (ex.: clients:authorized e
 // clients:blocked disjuntos). Esquema invalido = erro do Redis com prefixo
 // TV30ESQUEMA (funcao, chave, campo e motivo) e NADA gravado.
