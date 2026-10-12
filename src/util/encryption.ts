@@ -17,6 +17,14 @@ export function base64UrlDecode(str: string): Buffer<ArrayBufferLike> {
     return Buffer.from(str, 'base64');
 }
 
+// Comparacao de segredo (correcao de 12/10, spec-1210-seguranca2, item 3):
+// tempo constante (crypto.timingSafeEqual) sobre os bytes; tamanhos
+// diferentes sao falha, sem comparar (timingSafeEqual lancaria). O tamanho
+// nao e segredo: o do refresh token e o do hash do desafio sao fixos.
+export function safeEqual(a: Buffer<ArrayBufferLike>, b: Buffer<ArrayBufferLike>): boolean {
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function sha256Encrypt(data: Buffer<ArrayBufferLike>): Buffer<ArrayBufferLike> {
     const hash = crypto.createHash('sha256');
     hash.update(data);
