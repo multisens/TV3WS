@@ -9,7 +9,8 @@ import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
 
-// --- session state (Redis is the single source of truth) ---
+// --- session state (read from Redis; the tv3ws also keeps the current service
+// in memory, core.app.sid, mirrored from aop/currentService) ---
 // currentUser e currentService NAO sao mantidos em memoria. Toda leitura
 // vai pro Redis em runtime, garantindo consistencia mesmo se a state for
 // alterada externamente (outro tv3ws, escrita direta, MQTT perdido etc).
