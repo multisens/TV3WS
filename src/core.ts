@@ -71,8 +71,21 @@ function getLocalIP(): string {
     return '127.0.0.1';
 }
 
+// Correcao de 12/10 (spec-1210-defeitos3, item 1): trocar de aplicacao (ou
+// encerrar a corrente) zera core.app.url, o diretorio de onde a C.6.4.7
+// (GET /tv3/current-service/apps/<appId>/files) le os arquivos. Antes, a
+// nova aplicacao servia o diretorio da anterior ate chegar o
+// aop/<sid>/<appId>/path dela, e a mensagem vazia em aop/<sid>/currentApp
+// era ignorada (a aplicacao encerrada seguia corrente, com o diretorio
+// dela). Sem diretorio conhecido a C.6.4.7 responde 305 (ver o PENDENTE em
+// api/aop-communication/app-files/service.ts).
+// Encerrar = mensagem vazia em aop/<sid>/currentApp (o que o broker entrega
+// quando o retido e apagado). PENDENTE (Joel): nao ha publicador desse topico
+// neste repositorio, e o contrato dele (como se sinaliza o fim da aplicacao)
+// nao esta escrito; vale a mensagem vazia, como nos outros topicos do testbed
+// em que '' e ausencia. Os nos (core.app.nodes) ficam como estavam: fora
+// desta correcao.
 function setAppId(appid: string): void {
-  if (!appid) return;
   if (data.app.id == appid) return;
 
   if (data.app.sid && data.app.id) {
@@ -88,6 +101,9 @@ function setAppId(appid: string): void {
     });
     mqttClient.removeTopicHandler(t, setAppNodes);
   }
+
+  // o diretorio era o da aplicacao anterior; o da nova chega pelo .../path
+  data.app.url = "";
 
   if (appid) {
     let t = mqttClient.parseTopic(TOPICS.app_path, {
@@ -283,6 +299,26 @@ export function showPINPopUp(pin: string, timeout: number) {
     logger.info(`Calling PIN popup with pin:\n${pin}\nTimeout in ${timeout}ms`);
     const msg = JSON.stringify({ value: pin, timeout: timeout });
     client.publish(_t.pin_popup, msg);
+}
+
+// Fechamento do pop-up de pareamento no fim do pareamento (C.4.3.2,
+// C.4.3.3; correcao de 12/10, spec-1210-defeitos item 1 — quem chama e
+// api/client-identification/service.ts, endPairing). Contrato com o AoP: no
+// MESMO topico do pop-up, {"close":true}; a camada grafica
+// (aop/public/js/popup.js) fecha o pop-up aberto daquele tipo e ignora a
+// mensagem se o pop-up na tela for de outro tipo ou se nao houver pop-up.
+// Abertura e fechamento saem deste cliente no mesmo topico e com a mesma QoS,
+// e o MQTT os entrega a quem assina nessa ordem.
+const closePopUpMessage = JSON.stringify({ close: true });
+
+export function closeQRCodePopUp() {
+    logger.info('Closing QRCode popup');
+    client.publish(_t.qrcode_popup, closePopUpMessage);
+}
+
+export function closePINPopUp() {
+    logger.info('Closing PIN popup');
+    client.publish(_t.pin_popup, closePopUpMessage);
 }
 
 export default data;

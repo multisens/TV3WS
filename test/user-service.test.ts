@@ -205,3 +205,95 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
         console.error = errorOrig;
     }
 });
+
+// --- 12/10 (spec-1210-seguranca2, item 1): arquivo de perfil (C.6.14.6) --------
+// O mesmo defeito da C.6.4.7: o caminho pedido era juntado a USER_THUMBS com
+// path.join e lido sem conferir se ficava dentro dele; bastava o mesmo texto
+// no campo avatar de um perfil com consentimento (o AoP grava o avatar do
+// POST /profile/create sem conferir formato). Agora: fora de USER_THUMBS,
+// inexistente ou que nao e arquivo da 305 (Tabela C.73).
+test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o conteudo; dentro, 200', async () => {
+    const fsm = await import('fs');
+    const osm = await import('os');
+    const root = fsm.mkdtempSync(path.join(osm.tmpdir(), 'tv3ws-thumbs-'));
+    const thumbs = path.join(root, 'thumbs');
+    fsm.mkdirSync(thumbs);
+    fsm.writeFileSync(path.join(root, 'segredo.txt'), 'SEGREDO-FORA-DE-THUMBS');
+    fsm.writeFileSync(path.join(thumbs, 'a.png'), 'PNG');
+    const thumbsOrig = process.env.USER_THUMBS;
+    process.env.USER_THUMBS = thumbs;
+    try {
+        for (const avatar of ['../segredo.txt', '/../segredo.txt', 'x/../../segredo.txt', '..\\segredo.txt','nao-existe.png', '.']) {
+            seedProfiles('svc-a');
+            store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar });
+            const r = await call('GET', `/current-service/users/files?path=${encodeURIComponent(avatar)}`);
+            expectError(r, 305);
+            assert.ok(!r.text.includes('SEGREDO'), `${avatar}: ${r.text}`);
+        }
+        seedProfiles('svc-a');   // avatar a.png
+        const ok = await call('GET', '/current-service/users/files?path=a.png');
+        assert.equal(ok.status, 200, ok.text);
+        assert.equal(ok.text, 'PNG');
+        // sem consentimento: 405 desde a rodada spec-1210-defeitos3 (caso
+        // abaixo); era 305
+        store.set(`user:${U1}:consent`, new Set(['outro']));
+        expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
+    } finally {
+        if (thumbsOrig === undefined) delete process.env.USER_THUMBS; else process.env.USER_THUMBS = thumbsOrig;
+        fsm.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+// --- 12/10 (spec-1210-defeitos3, item 2): C.6.14.6 sem consentimento -----------
+// Tabela C.73 (p. 333; p. 351 do PDF): "405: If the user has not granted access
+// to the broadcaster corresponding to the informed service" e "305: If a
+// non-existent <path> is specified in the receiver". Antes, o perfil sem
+// consentimento dava 305, como o caminho de ninguem.
+test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com consentimento, 200; de ninguem, 305', async () => {
+    const fsm = await import('fs');
+    const osm = await import('os');
+    const thumbs = fsm.mkdtempSync(path.join(osm.tmpdir(), 'tv3ws-thumbs405-'));
+    fsm.writeFileSync(path.join(thumbs, 'a.png'), 'PNG-DO-PERFIL');
+    fsm.writeFileSync(path.join(thumbs, 'solto.png'), 'PNG-SOLTO');
+    const thumbsOrig = process.env.USER_THUMBS;
+    process.env.USER_THUMBS = thumbs;
+    try {
+        // dono do avatar sem consentimento para o servico corrente
+        seedProfiles('svc-a');
+        store.set(`user:${U1}:consent`, new Set(['svc-b']));
+        let r = await call('GET', '/current-service/users/files?path=a.png');
+        expectError(r, 405);
+        assert.ok(!r.text.includes('PNG-DO-PERFIL'), r.text);
+        // sem consentimento nenhum (conjunto vazio): 405
+        store.set(`user:${U1}:consent`, new Set());
+        expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
+        // o consentimento vem antes do arquivo: avatar inexistente de perfil
+        // sem consentimento tambem da 405 (nao revela se o arquivo existe)
+        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'nao-existe.png' });
+        expectError(await call('GET', '/current-service/users/files?path=nao-existe.png'), 405);
+
+        // dois perfis com o mesmo avatar: basta um com consentimento
+        seedProfiles('svc-a');
+        store.set('users:index', new Set([U9, U1]));
+        store.set(`user:${U9}`, { id: U9, nickname: 'Nove', avatar: 'a.png' });
+        store.set(`user:${U9}:consent`, new Set(['svc-b']));
+        r = await call('GET', '/current-service/users/files?path=a.png');
+        assert.equal(r.status, 200, r.text);
+        assert.equal(r.text, 'PNG-DO-PERFIL');
+        // os dois sem consentimento: 405
+        store.set(`user:${U1}:consent`, new Set(['svc-b']));
+        expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
+
+        // arquivo que existe mas nao e avatar de ninguem: 305, como antes
+        seedProfiles('svc-a');
+        expectError(await call('GET', '/current-service/users/files?path=solto.png'), 305);
+        // avatar de perfil com consentimento, arquivo inexistente: 305
+        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'nao-existe.png' });
+        expectError(await call('GET', '/current-service/users/files?path=nao-existe.png'), 305);
+    } finally {
+        if (thumbsOrig === undefined) delete process.env.USER_THUMBS; else process.env.USER_THUMBS = thumbsOrig;
+        fsm.rmSync(thumbs, { recursive: true, force: true });
+        store.delete(`user:${U9}`);
+        store.delete(`user:${U9}:consent`);
+    }
+});

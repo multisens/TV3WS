@@ -54,12 +54,24 @@ function GETUserFile(req: Request, res: Response): void {
 
 	const path = req.query.path as string;
 	service.checkConsent(path)
-	.then((result) => {
-		if (!result) {
+	.then((access) => {
+		// perfil dono do avatar sem consentimento: 405 (Tabela C.73; correcao
+		// de 12/10, spec-1210-defeitos3 item 2 — antes, 305; ver
+		// service.ts, checkConsent)
+		if (access === 'no-consent') {
+			returnError(res, 405, path);
+		}
+		else if (access !== 'granted') {
 			returnError(res, 305, path);
 		}
 		else {
+			// caminho fora de USER_THUMBS ou inexistente: 305 (Tabela C.73;
+			// correcao de 12/10, ver service.ts, getFile)
 			const file_data = service.getFile(path);
+			if (file_data === undefined) {
+				returnError(res, 305, path);
+				return;
+			}
 
 			res.setHeader('Content-Length', file_data.size);
 			res.setHeader('Content-Type', file_data.mime);

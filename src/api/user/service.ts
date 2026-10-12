@@ -5,6 +5,7 @@ import path from 'path';
 import redis from '../../redis-client';
 import * as funcoes from '../../redis-funcoes';
 import { ApiError, execOrThrow } from '../../util';
+import { resolveInsideDir } from '../../util/safe-path';
 import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
@@ -207,7 +208,20 @@ async function getUserAttributes(uuid: string, scidParam: string | undefined, qu
     return { kind: 'json', attrs: { ...basics, ...broadcaster } };
 }
 
-async function checkConsent(avatarPath: string): Promise<boolean> {
+// C.6.14.6: o arquivo pedido e o avatar de algum perfil? E esse perfil
+// concedeu acesso ao broadcaster do servico corrente?
+// - 'granted': de um perfil com consentimento (o arquivo pode ser lido);
+// - 'no-consent': so de perfis SEM consentimento. Correcao de 12/10
+//   (spec-1210-defeitos3, item 2): o controller responde 405, o codigo da
+//   Tabela C.73 (p. 333; p. 351 do PDF): "405: If the user has not granted
+//   access to the broadcaster corresponding to the informed service
+//   (<service-context-id>)". Antes, 305, o mesmo do caminho inexistente;
+// - 'no-owner': nao e o avatar de nenhum perfil (305, como antes).
+// O servico conferido segue o corrente (session:current-service-id), e nao
+// o <service-context-id> da URL, como antes desta correcao.
+export type AvatarAccess = 'granted' | 'no-consent' | 'no-owner';
+
+async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
     const currentService = await readCurrentService();
     const userIds = await redis.smembers('users:index');
 
@@ -218,14 +232,16 @@ async function checkConsent(avatarPath: string): Promise<boolean> {
     });
     const results = await execOrThrow(pipeline);
 
+    let owned = false;
     for (let i = 0; i < userIds.length; i++) {
         const avatar = results[i * 2] as string | null;
         const hasConsent = results[i * 2 + 1];
-        if (avatar === avatarPath && hasConsent) {
-            return true;
+        if (avatar === avatarPath) {
+            if (hasConsent) return 'granted';
+            owned = true;
         }
     }
-    return false;
+    return owned ? 'no-consent' : 'no-owner';
 }
 
 
@@ -296,10 +312,23 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
 
 type FileData = { size: number; mime: string; name: string; file: string };
 
-function getFile(fpath: string): FileData {
-    const file_path = path.join(process.env.USER_THUMBS as string, fpath);
+// Correcao de 12/10 (spec-1210-seguranca2, item 1, o mesmo defeito da
+// C.6.4.7): o caminho e resolvido dentro de USER_THUMBS e nao sai dele
+// (regras em ../../util/safe-path.ts). Antes, path.join(USER_THUMBS, path)
+// lia qualquer arquivo que o processo alcancasse, desde que o mesmo texto
+// estivesse no campo avatar de um perfil com consentimento para o servico
+// (checkConsent) — e o avatar e gravado pela plataforma sem conferencia de
+// formato (aop/src/modules/profile-manager/service.js, createProfile, a
+// partir do corpo do POST /profile/create). undefined = recusado,
+// inexistente ou que nao e arquivo: o controller responde 305 (Tabela C.73,
+// p. 333; p. 351 do PDF: "305: If a non-existent <path> is specified in the
+// receiver"); antes, o inexistente dava 404 {error:200} (ENOENT).
+function getFile(fpath: string): FileData | undefined {
+    const entry = resolveInsideDir(process.env.USER_THUMBS, fpath);
+    if (entry === undefined || !entry.stat.isFile()) return undefined;
+    const file_path = entry.path;
     const file_name = path.parse(file_path).base;
-    const stat = fs.statSync(file_path);
+    const stat = entry.stat;
     const file = fs.readFileSync(file_path, 'binary');
     return {
         size: stat.size,
