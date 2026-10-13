@@ -91,9 +91,12 @@ export function isLoopbackHost(host: string): boolean {
 export function advertiseWarnings(e: AdvertisedEndpoint): string[] {
     const out: string[] = [];
     if (isLoopbackHost(e.host)) {
-        // PENDENTE (Joel): o compose raiz passa SERVER_URL=localhost por padrao,
-        // entao o anuncio padrao e de loopback. Falta decidir o padrao (cair no
-        // IP local quando SERVER_URL for loopback, ou exigir SSDP_ADVERTISE_HOST).
+        // DECIDIDO (Luis, 11/10; B2): com o anuncio da borda ligado, o
+        // SSDP_ADVERTISE_HOST e obrigatorio (infra/edgegateway/ssdp/config.go e
+        // scripts/preflight.sh). Aqui (o /manifest e o anunciante Node do
+        // dev-host) a cadeia SSDP_ADVERTISE_HOST > SERVER_URL > IP local fica, e
+        // o host de loopback (SERVER_URL=localhost, padrao do compose) so gera
+        // este aviso.
         out.push(`host anunciado '${e.host}' (via ${e.source}) e de loopback: um cliente em outro `
             + 'equipamento recebe o anuncio mas nao alcanca o LOCATION nem o Server-BaseURL (C.3.4). '
             + 'Defina SSDP_ADVERTISE_HOST com o IP ou nome do equipamento na rede (no compose: .env da raiz '
