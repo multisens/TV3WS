@@ -7,7 +7,13 @@
 // client-identification com o core REAL (o que sai no MQTT e o que a camada
 // grafica recebe) e redis-client e mqtt-client trocados por dubles. O duble
 // do broker responde "true" ao pop-up sim/nao no lugar do espectador.
-import { test, before, after } from 'node:test';
+//
+// Desde a noite de 12/10 (decisao do Luis; parte da G2), um /tv3/authorize
+// novo recebe 103 enquanto ha na tela um sim/nao esperando resposta, ou o QR
+// code ou o PIN de um pareamento (C.4.2.3; Tabela C.3). Os casos dessa regra
+// estao no fim; antes deles, os que supunham a substituicao do pop-up na
+// tela viraram casos de 103.
+import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -32,13 +38,18 @@ const CLOSE = '{"close":true}';
 // mensagem pelo evento 'message').
 const published: [string, string][] = [];
 let onMessage: ((t: string, m: Buffer) => void) | undefined;
+// resposta do "espectador" ao sim/nao: 'true', 'false' ou null (segura a
+// resposta ate o caso chamar responderSimNao)
+let respostaSimNao: 'true' | 'false' | null = 'true';
+const responderSimNao = (v: 'true' | 'false') => onMessage?.(`${YESNO}/response`, Buffer.from(v));
 const mqttClientRaw = {
     on(ev: string, h: (t: string, m: Buffer) => void) { if (ev === 'message') onMessage = h; },
     subscribe() { /* sem broker */ },
     unsubscribe() { /* sem broker */ },
     publish(t: string, m: string) {
         published.push([t, m]);
-        if (t === `${YESNO}/message`) setImmediate(() => onMessage?.(`${YESNO}/response`, Buffer.from('true')));
+        const v = respostaSimNao;
+        if (t === `${YESNO}/message` && v !== null) setImmediate(() => responderSimNao(v));
     },
 };
 
@@ -56,7 +67,7 @@ stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqttClientRaw })
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const router = require('../src/api/client-identification').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { PAIRING_POPUP_TIMEOUT_MS } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
+const { PAIRING_POPUP_TIMEOUT_MS, _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
 
@@ -71,6 +82,13 @@ before(async () => {
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3`;
 });
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
+// cada caso comeca com a camada grafica livre, o relogio real e o espectador
+// respondendo "sim"
+beforeEach(() => {
+    _camadaParaTestes.limpar();
+    _camadaParaTestes.relogio();
+    respostaSimNao = 'true';
+});
 
 // --- cliente nao local (cripto da Tabela C.4 e da C.6.1.2.2) --------------------
 const sha = (b: Buffer) => createHash('sha256').update(b).digest();
@@ -115,6 +133,14 @@ function challengeResponse(p: Pairing, wrong = false): string {
     const plain = aes(false, p.secret, Buffer.from(p.challenge, 'base64url'));
     return aes(true, p.secret, sha(wrong ? randomBytes(16) : plain)).toString('base64url');
 }
+
+// /tv3/authorize cru, sem conferir nada (para os casos de erro)
+async function authorizeRaw(q: Record<string, string>) {
+    const res = await fetch(`${base}/authorize?${new URLSearchParams(q)}`);
+    return { status: res.status, json: await res.json() as any };
+}
+const novoLocal = () => ({ clientid: randomUUID(), 'display-name': 'teste-camada' });
+const novoNaoLocal = () => ({ ...novoLocal(), pm: 'qrcode' });
 
 async function token(cid: string, cr: string) {
     const res = await fetch(`${base}/token?${new URLSearchParams({ clientid: cid, 'challenge-response': cr })}`);
@@ -182,25 +208,30 @@ test('abertura antes do fechamento, no mesmo topico', async () => {
     assert.deepEqual(on(QR, from), [p.opened, CLOSE]);
 });
 
-test('pop-up substituido pelo de outro cliente: o fim do pareamento do primeiro nao fecha o do segundo', async () => {
+test('103 com o QR code de A na tela: B (nao local ou local) recebe 103 na hora, sem pop-up; o sucesso de A libera a camada', async () => {
     const a = await authorize('qrcode');
-    const b = await authorize('qrcode');   // a camada grafica troca o QR code de A pelo de B
     const from = published.length;
+    expectError(await authorizeRaw(novoNaoLocal()), 103);
+    expectError(await authorizeRaw(novoLocal()), 103);
+    assert.deepEqual(on(`${YESNO}/message`, from), [], 'nenhum sim/nao novo');
+    assert.deepEqual(on(QR, from), [], 'o QR code de A fica na tela');
     assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
-    assert.deepEqual(on(QR, from), [], 'A terminou, mas o QR code na tela e o de B');
-    assert.equal((await token(b.cid, challengeResponse(b))).status, 200);
     assert.deepEqual(on(QR, from), [CLOSE]);
+    // camada livre: o PIN de outro cliente sai e fecha no sucesso dele
+    const k = await authorize('kex');
+    assert.equal((await token(k.cid, challengeResponse(k))).status, 200);
+    assert.deepEqual(on(PIN, from), [k.opened, CLOSE]);
 });
 
-test('PIN de um cliente e QR code de outro: cada fim de pareamento fecha so o pop-up do seu tipo', async () => {
-    const q = await authorize('qrcode');
-    const k = await authorize('kex');
+test('103 com o PIN de A na tela; o reuso do clientid de A segue dando 101 (o 101 vem antes do 103)', async () => {
+    const a = await authorize('kex');
     const from = published.length;
-    assert.equal((await token(k.cid, challengeResponse(k))).status, 200);
+    expectError(await authorizeRaw(novoNaoLocal()), 103);
+    expectError(await authorizeRaw({ clientid: a.cid, 'display-name': 'teste-camada', pm: 'qrcode' }), 101);
+    assert.deepEqual(on(`${YESNO}/message`, from), []);
+    assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
     assert.deepEqual(on(PIN, from), [CLOSE]);
-    assert.deepEqual(on(QR, from), []);
-    assert.equal((await token(q.cid, challengeResponse(q))).status, 200);
-    assert.deepEqual(on(QR, from), [CLOSE]);
+    assert.equal(_camadaParaTestes.ocupacao(), undefined, 'camada livre depois do sucesso');
 });
 
 test('emissao da credencial falha depois do desafio conferido: sem fechamento (pareamento nao concluido)', async () => {
@@ -219,6 +250,69 @@ test('emissao da credencial falha depois do desafio conferido: sem fechamento (p
     assert.deepEqual(on(QR, from), [], 'a credencial nao saiu: o pop-up fica');
     // a tentativa segue aberta (PENDENTE (Joel) em service.ts): o sucesso fecha
     assert.equal((await token(p.cid, challengeResponse(p))).status, 200);
+    assert.deepEqual(on(QR, from), [CLOSE]);
+});
+
+test('103 com o sim/nao de um pedido esperando resposta: outro cliente e o MESMO clientid recebem 103; o primeiro recebe a resposta do espectador', async () => {
+    respostaSimNao = null;
+    const cid = randomUUID();
+    const from = published.length;
+    const primeiro = authorizeRaw({ clientid: cid, 'display-name': 'teste-camada' });
+    for (let i = 0; i < 100 && on(`${YESNO}/message`, from).length === 0; i++) await new Promise(r => setTimeout(r, 10));
+    assert.equal(on(`${YESNO}/message`, from).length, 1, 'o sim/nao do primeiro na tela');
+    expectError(await authorizeRaw(novoLocal()), 103);
+    expectError(await authorizeRaw(novoNaoLocal()), 103);
+    // o mesmo clientid ao mesmo tempo (KNOWN-ISSUES.md, ate 12/10: o segundo
+    // abria outro pop-up, tomava a resposta e o primeiro acabava bloqueado)
+    expectError(await authorizeRaw({ clientid: cid, 'display-name': 'teste-camada' }), 103);
+    assert.equal(on(`${YESNO}/message`, from).length, 1, 'um sim/nao so');
+    responderSimNao('true');
+    const r = await primeiro;
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(typeof r.json.refreshToken, 'string');
+    // o 103 do segundo pedido com o mesmo clientid nao liberou a reserva do
+    // primeiro nem estragou a autorizacao dele; a camada agora esta livre
+    assert.equal(_camadaParaTestes.ocupacao(), undefined);
+    respostaSimNao = 'true';
+    assert.equal((await authorizeRaw(novoLocal())).status, 200);
+});
+
+test('a recusa no sim/nao libera a camada', async () => {
+    respostaSimNao = 'false';
+    expectError(await authorizeRaw(novoLocal()), 102);
+    assert.equal(_camadaParaTestes.ocupacao(), undefined);
+    respostaSimNao = 'true';
+    assert.equal((await authorizeRaw(novoLocal())).status, 200);
+});
+
+test('erro depois da reserva (gravacao recusada pela funcao do Redis) libera a camada', async () => {
+    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: recusa de teste';
+    fake.recusar('tv30_cliente_autoriza', msg);
+    const errorOrig = console.error;
+    console.error = () => undefined;
+    try {
+        expectError(await authorizeRaw(novoLocal()), 200);
+    } finally {
+        fake.recusar('tv30_cliente_autoriza');
+        console.error = errorOrig;
+    }
+    assert.equal(_camadaParaTestes.ocupacao(), undefined);
+    assert.equal((await authorizeRaw(novoLocal())).status, 200);
+});
+
+test('a trava de 120 s libera a camada; o sucesso tardio de A nao fecha o QR code de B', async () => {
+    let agora = Date.now();
+    _camadaParaTestes.relogio(() => agora);
+    const a = await authorize('qrcode');
+    expectError(await authorizeRaw(novoNaoLocal()), 103);
+    agora += PAIRING_POPUP_TIMEOUT_MS;   // a camada grafica fechou o QR code de A
+    const b = await authorize('qrcode');
+    const from = published.length;
+    // o desafio de A continua valendo depois da trava (prazo do desafio: G2,
+    // com o Joel), mas o QR code na tela e o de B
+    assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
+    assert.deepEqual(on(QR, from), [], 'o fim de A depois da trava nao fecha o pop-up de B');
+    assert.equal((await token(b.cid, challengeResponse(b))).status, 200);
     assert.deepEqual(on(QR, from), [CLOSE]);
 });
 
