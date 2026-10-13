@@ -8,7 +8,7 @@
 // 404 {error:200}, sem travar). Rodada de 10/10: PIN do kex com quatro
 // digitos (C.4.3.3). Rodada de 12/10 (spec-1210-seguranca): parametro vazio
 // vale como ausente (105) e o challenge vale uma vez (102 na repeticao).
-import { test, before, after } from 'node:test';
+import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -57,6 +57,13 @@ const router = require('../src/api/client-identification').default;
 const manager = require('../src/modules/auth-manager/manager') as typeof import('../src/modules/auth-manager/manager');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
+// Desde a noite de 12/10 (decisao do Luis), o QR code ou o PIN de um
+// pareamento na tela faz o /tv3/authorize seguinte receber 103; varios casos
+// daqui deixam o pareamento aberto de proposito. Cada caso comeca com a
+// camada grafica livre (os casos do 103 estao em pairing-popup.test.ts).
+beforeEach(() => _camadaParaTestes.limpar());
 
 // --- servidor ------------------------------------------------------------------
 let server: Server;
@@ -584,6 +591,9 @@ test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8 (12/10
     let p: NonLocal | undefined;
     let i = -1;
     for (let tries = 0; tries < 40 && i < 0; tries++) {
+        // cada tentativa deixa o QR code da anterior na tela (103 desde a
+        // noite de 12/10): a camada fica livre para a proxima
+        _camadaParaTestes.limpar();
         p = await pairNonLocal('qrcode');
         i = sha(p.plain).findIndex(b => b >= 0xf8);
     }

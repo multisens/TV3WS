@@ -4,7 +4,7 @@ import logger from '../../logger';
 import * as manager from '../../modules/auth-manager/manager'
 import Client, { ClientClass, PairingMaterial } from '../../modules/auth-manager/client';
 import redis from '../../redis-client';
-import service, { pairingMethods } from './service';
+import service, { pairingMethods, Reserva } from './service';
 import { returnError, aes128ECBEncrypt, base64UrlDecode, base64UrlEncode, aes128ECBDecrypt } from '../../util';
 dotenv.config();
 
@@ -90,7 +90,22 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     // autorizacao com clientid NOVO, e o espectador e consultado de novo
     // (C.6.1.4.5, p. 219; p. 237 do PDF).
 
-    const authorized = await checkAuthorization(clientId as string, displayName as string, clientClass, res);
+    // Camada grafica (decisao do Luis em 12/10, noite; service.ts,
+    // reservarCamada): a reserva do sim/nao deste pedido sai no fim dele, no
+    // finally abaixo, salvo se ja passou ao pop-up do pareamento.
+    const reserva: { r?: Reserva } = {};
+    try {
+        await authorizeReserved(res, clientId, displayName, pm, key, clientClass, local, reserva);
+    } finally {
+        service.liberarReserva(reserva.r);
+    }
+}
+
+// O resto do /tv3/authorize, com a camada grafica ja reservada (ou o 103).
+async function authorizeReserved(res: Response, clientId: string, displayName: string,
+                                 pm: string, key: string, clientClass: ClientClass, local: boolean,
+                                 reserva: { r?: Reserva }): Promise<void> {
+    const authorized = await checkAuthorization(clientId as string, displayName as string, clientClass, res, reserva);
     logger.debug(`GETAuthorize received authorized = ${authorized}`);
     if (!authorized) return;
 
@@ -184,7 +199,8 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
 // D-0510-4 (reuniao 05/10 com o Joel): "ja usado" = em clients:authorized,
 // em clients:blocked ou com registro client:{id} (autorizacao anterior ao
 // conjunto); uma leitura so (manager.clientIdStatus).
-async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response): Promise<boolean> {
+async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response,
+                                  reserva: { r?: Reserva }): Promise<boolean> {
     const status = await manager.clientIdStatus(clientId as string);
     if (status === 'used') {
         returnError(res, 101, 'clientid has been used before (already authorized); retry with a new clientid.');
@@ -193,6 +209,17 @@ async function checkAuthorization(clientId: string, displayName: string, clientC
 
     if (status === 'blocked') {
         returnError(res, 101, 'clientid has been used before (blocked by the viewer); retry with a new clientid.');
+        return false;
+    }
+
+    // 103 com a camada grafica ocupada por outro sim/nao, QR code ou PIN
+    // (decisao do Luis em 12/10, noite; C.4.2.3 e Tabela C.3: ver service.ts,
+    // reservarCamada). Depois do 101: o 103 so vale para quem chegaria ao
+    // pop-up. Entre a reserva e a publicacao do sim/nao nao ha await, entao
+    // dois pedidos nao reservam a camada juntos.
+    reserva.r = service.reservarCamada(clientId);
+    if (!reserva.r) {
+        returnError(res, 103, 'another authorization or pairing pop-up is on screen; try again later.');
         return false;
     }
 

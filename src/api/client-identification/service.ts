@@ -37,17 +37,85 @@ export const PAIRING_POPUP_TIMEOUT_MS = 120 * 1000;
 
 type PairingPopUp = 'qrcode' | 'pin';
 
-// Cliente dono do pop-up de pareamento de cada tipo que esta na tela. A
-// camada grafica tem UM pop-up e o substitui quando chega outro: o fim do
-// pareamento de um cliente cujo pop-up ja foi substituido pelo de outro
-// cliente nao pode fechar o pop-up do outro. Vive so em memoria, como o
-// material do pareamento (um reinicio do tv3ws perde os dois; a trava da
-// camada grafica fecha o pop-up que estiver na tela).
-const popUpOwner = new Map<PairingPopUp, string>();
+// Camada grafica: um pop-up de autorizacao de cada vez (decisao do Luis em
+// 12/10, noite; a primeira pergunta da G2 de docs/decisoes-pendentes.md).
+// Enquanto houver na tela o sim/nao de um pedido esperando resposta, ou o QR
+// code ou o PIN de um pareamento, um /tv3/authorize novo recebe 103 na hora,
+// sem pop-up. Na norma:
+// - C.4.2.3 (p. 209; p. 227 do PDF): "If there is any restriction preventing
+//   the pop-up from being displayed at that time, the implementation shall
+//   immediately send a response to the request with error code 103, so that
+//   the client can try again later";
+// - Tabela C.3 (p. 215; p. 233 do PDF): "103: When the TV 3.0 receiver is
+//   unable to display the authorization pop-up".
+// Ate 12/10 o pop-up novo substituia o da tela: o sim/nao de outro cliente
+// tirava o QR code ou o PIN de um pareamento em andamento, e dois pedidos ao
+// mesmo tempo se misturavam (o core.ts guarda um tratador por topico de
+// resposta; KNOWN-ISSUES.md).
+//
+// A reserva e do PEDIDO (um objeto por /tv3/authorize), e nao do clientid: o
+// 103 de um segundo pedido com o mesmo clientid nao pode liberar a reserva do
+// primeiro. Ela nasce antes do sim/nao e, no nao local que aceitou, passa ao
+// pop-up do pareamento sem janela entre os dois: o controller so libera a
+// reserva que ainda for a do sim/nao. Sai:
+// - a do sim/nao, no fim do /tv3/authorize (o controller chama
+//   liberarReserva) ou, por seguranca, no prazo do sim/nao mais uma folga;
+// - a do QR code ou do PIN, no sucesso do pareamento (endPairing) ou no fim
+//   da trava de 120 s, quando a camada grafica fecha o pop-up sozinha.
+// O prazo do desafio continua com o Joel (G2): a trava fecha o pop-up e
+// libera a camada, mas o desafio pendente segue valendo. Vive so em memoria,
+// como o material do pareamento (um reinicio do tv3ws perde os dois; a trava
+// da camada grafica fecha o pop-up que estiver na tela).
+export const YESNO_TIMEOUT_MS = 10 * 1000;
+// gravacoes do Redis entre o "sim" e o pop-up do pareamento (o comando do
+// Redis desiste em 1,5 s, D-0510-6)
+const YESNO_FOLGA_MS = 5 * 1000;
+
+export type Reserva = { tipo: 'yesno' | PairingPopUp; dono: string; ate: number };
+let ocupacao: Reserva | undefined;
+let agora: () => number = Date.now;
+
+function camadaOcupada(): Reserva | undefined {
+    if (ocupacao && ocupacao.ate <= agora()) ocupacao = undefined;
+    return ocupacao;
+}
+
+// Reserva a camada para o sim/nao do pedido; undefined se ela estiver ocupada
+// (o controller responde 103).
+function reservarCamada(clientId: string): Reserva | undefined {
+    const atual = camadaOcupada();
+    if (atual) {
+        logger.info(`Camada grafica ocupada (${atual.tipo} do cliente ${atual.dono}): /tv3/authorize do cliente ${clientId} recebe 103`);
+        return undefined;
+    }
+    ocupacao = { tipo: 'yesno', dono: clientId, ate: agora() + YESNO_TIMEOUT_MS + YESNO_FOLGA_MS };
+    return ocupacao;
+}
+
+// Fim do pedido (local atendido, recusa, erro): libera a reserva dele se ela
+// ainda for a do sim/nao. Se ela ja passou ao pop-up do pareamento, ou se a
+// camada e de outro pedido, nada muda.
+function liberarReserva(r: Reserva | undefined): void {
+    if (r !== undefined && ocupacao === r) ocupacao = undefined;
+}
+
+// O pop-up do pareamento toma a camada (a reserva do sim/nao deste pedido sai
+// sem janela) ate o sucesso ou o fim da trava.
+function ocuparComPareamento(tipo: PairingPopUp, clientId: string): void {
+    ocupacao = { tipo, dono: clientId, ate: agora() + PAIRING_POPUP_TIMEOUT_MS };
+}
+
+// So para os testes (test/pairing-popup.test.ts e
+// test/client-identification.test.ts): relogio e estado da camada.
+export const _camadaParaTestes = {
+    relogio(f?: () => number): void { agora = f ?? Date.now; },
+    limpar(): void { ocupacao = undefined; },
+    ocupacao(): Reserva | undefined { return camadaOcupada(); },
+};
 
 async function askAuthorization(displayName: string): Promise<boolean> {
     const message = `A aplicação "${displayName}" deseja acessar as informações do sinal de TV Digital.\nVocê deseja autorizar isto?`;
-    const response = await core.showYesNoPopUpAsync(message, 10000);
+    const response = await core.showYesNoPopUpAsync(message, YESNO_TIMEOUT_MS);
     logger.debug(`Received response ${response} in askAuthorization`);
     return response;
 }
@@ -58,7 +126,7 @@ function generateQRCodeSecret(client: Client): Buffer<ArrayBufferLike> {
     
     // Use key to create QR Code
     const base64Key = base64UrlEncode(simm_key);
-    popUpOwner.set('qrcode', client.getId());
+    ocuparComPareamento('qrcode', client.getId());
     core.showQRCodePopUp(base64Key, PAIRING_POPUP_TIMEOUT_MS);
 
     // Applies SHA-256 to key and get the 128 most significative bits
@@ -86,7 +154,7 @@ function generatePINSecret(client: Client, key: string): Buffer<ArrayBufferLike>
     simm_key = sha256Encrypt(simm_key);
     
     // Use key to create PIN
-    popUpOwner.set('pin', client.getId());
+    ocuparComPareamento('pin', client.getId());
     core.showPINPopUp(pinFromHash(simm_key), PAIRING_POPUP_TIMEOUT_MS);
 
     // Applies SHA-256 to key and get the 128 most significative bits
@@ -111,21 +179,21 @@ function generateChallenge(client: Client, secret: Buffer<ArrayBufferLike>) {
 
 // Fim do pareamento do cliente (C.4.3.2, C.4.3.3; ver PAIRING_POPUP_TIMEOUT_MS
 // acima): manda a camada grafica fechar o pop-up de pareamento dele, se ainda
-// for o dele. Falha na publicacao vai para o log e nao desfaz a resposta do
-// /tv3/token, que ja saiu (a trava fecha o pop-up).
+// for o dele, e libera a camada (reservarCamada). Depois da trava, o pop-up ja
+// saiu da tela e a camada ja esta livre: nada a fechar. Falha na publicacao
+// vai para o log e nao desfaz a resposta do /tv3/token, que ja saiu (a trava
+// fecha o pop-up).
 function endPairing(clientId: string): void {
     try {
-        if (popUpOwner.get('qrcode') === clientId) {
-            popUpOwner.delete('qrcode');
-            core.closeQRCodePopUp();
-        }
-        if (popUpOwner.get('pin') === clientId) {
-            popUpOwner.delete('pin');
-            core.closePINPopUp();
+        const o = camadaOcupada();
+        if (o && o.tipo !== 'yesno' && o.dono === clientId) {
+            ocupacao = undefined;
+            if (o.tipo === 'qrcode') core.closeQRCodePopUp();
+            else core.closePINPopUp();
         }
     } catch (err) {
         logger.error(`Failed to close the pairing popup of client ${clientId}: ${(err as Error)?.message}`);
     }
 }
 
-export default { askAuthorization, generateQRCodeSecret, generatePINSecret, generateChallenge, endPairing }
+export default { askAuthorization, generateQRCodeSecret, generatePINSecret, generateChallenge, endPairing, reservarCamada, liberarReserva }
