@@ -1,18 +1,17 @@
 import { getLocalIP } from './util/networking';
 
-// Endereco que a descoberta SSDP divulga (C.3.4). Logica pura, sem socket,
-// para ser testavel isoladamente (test/ssdp-config.test.ts).
+// Endereco que o /manifest divulga (C.3.4). Logica pura, sem socket, para ser
+// testavel isoladamente (test/ssdp-config.test.ts).
 //
 // D10: o cliente acessa a BORDA (edgegateway), nao a implementacao interna.
-// Por isso LOCATION e Server-BaseURL usam a porta da borda — 44642, fixa
-// pela norma para o Server-BaseURL — e Server-SecureBaseURL a 44643, e nao
-// HTTP_PORT/HTTPS_PORT do tv3ws (44652/44653 no container, nao publicadas).
-// L6 decidida = opcao A (Luis, 09/10): no compose, quem anuncia e a borda, em
-// rede do host (infra/edgegateway/ssdp, em Go), e o /manifest fica no tv3ws
-// (src/manifest.ts). Este modulo serve ao /manifest e ao anuncio do tv3ws
-// rodando sozinho no host (dev-host). A regra de host daqui (abaixo) nao muda
-// com a decisao do Luis em 11/10 (B2); a da borda deixou de ser a mesma: com o
-// anuncio ligado, ela exige SSDP_ADVERTISE_HOST e nao cai no SERVER_URL.
+// Por isso Server-BaseURL usa a porta da borda — 44642, fixa pela norma — e
+// Server-SecureBaseURL a 44643, e nao HTTP_PORT/HTTPS_PORT do tv3ws
+// (44652/44653 no container, nao publicadas). Quem anuncia e o anunciante
+// nativo do host (infra/edgegateway/ssdp, ./tv30 up; complemento do Joel de
+// 15/10); o anunciante Node que este modulo servia no dev-host saiu nessa
+// data. O host de cada resposta do /manifest sai da requisicao
+// (src/manifest.ts); a cadeia daqui (SSDP_ADVERTISE_HOST > SERVER_URL > IP
+// local) da a sobreposicao e o ultimo recurso.
 
 export const SSDP_ST = 'urn:schemas-sbtvd-org:service:TV3.0WebServices:1';
 
@@ -70,11 +69,9 @@ export function resolveAdvertisedEndpoint(
 }
 
 export const baseURL = (e: AdvertisedEndpoint): string => `${e.host}:${e.httpPort}`;
-// PENDENTE (Joel): lacuna L3 — a 44643 da borda ainda e HTTP puro (sem TLS),
-// mas a C.3.4 preve https://<Server-SecureBaseURL>/tv3/<API>: o /manifest
-// anuncia um endpoint seguro que nao existe. Ate a decisao da L3, falta
-// escolher o que anunciar aqui (a porta da borda, como hoje, ou o HTTPS do
-// proprio tv3ws, que nao e publicado no host).
+// A7 (Joel, 15/10): a 44643 da borda tem TLS (certificado autoassinado do
+// receptor, tls-init); o /manifest anuncia a 44643 no Server-SecureBaseURL, e
+// o cliente monta https:// (C.3.4).
 export const secureBaseURL = (e: AdvertisedEndpoint): string => `${e.host}:${e.httpsPort}`;
 export const locationURL = (e: AdvertisedEndpoint): string => `http://${baseURL(e)}/manifest`;
 
@@ -87,16 +84,13 @@ export function isLoopbackHost(host: string): boolean {
 
 // Avisos sobre o que vai ser anunciado (D9: nada em silencio). Nao mudam o
 // anuncio — a ordem SSDP_ADVERTISE_HOST > SERVER_URL > IP local e a da
-// especificacao; o servidor SSDP so os registra no boot.
+// especificacao; o /manifest (src/manifest.ts) so os registra no boot.
 export function advertiseWarnings(e: AdvertisedEndpoint): string[] {
     const out: string[] = [];
-    if (isLoopbackHost(e.host)) {
-        // DECIDIDO (Luis, 11/10; B2): com o anuncio da borda ligado, o
-        // SSDP_ADVERTISE_HOST e obrigatorio (infra/edgegateway/ssdp/config.go e
-        // scripts/preflight.sh). Aqui (o /manifest e o anunciante Node do
-        // dev-host) a cadeia SSDP_ADVERTISE_HOST > SERVER_URL > IP local fica, e
-        // o host de loopback (SERVER_URL=localhost, padrao do compose) so gera
-        // este aviso.
+    if (e.source === 'SSDP_ADVERTISE_HOST' && isLoopbackHost(e.host)) {
+        // So a sobreposicao fixa o host do /manifest (src/manifest.ts); sem
+        // ela, o host sai da requisicao, e o SERVER_URL=localhost do compose
+        // nao chega a ser usado.
         out.push(`host anunciado '${e.host}' (via ${e.source}) e de loopback: um cliente em outro `
             + 'equipamento recebe o anuncio mas nao alcanca o LOCATION nem o Server-BaseURL (C.3.4). '
             + 'Defina SSDP_ADVERTISE_HOST com o IP ou nome do equipamento na rede (no compose: .env da raiz '
@@ -106,7 +100,5 @@ export function advertiseWarnings(e: AdvertisedEndpoint): string[] {
         out.push(`EDGE_HTTP_PORT=${e.httpPort}: a C.3.4 fixa ${DEFAULT_EDGE_HTTP_PORT} no Server-BaseURL; `
             + 'o anuncio fica fora da norma (use so para teste).');
     }
-    out.push(`Server-SecureBaseURL ${secureBaseURL(e)} aponta para porta SEM TLS (a borda ainda nao tem `
-        + 'HTTPS, lacuna L3): cliente que use https:// nesse endereco falha.');
     return out;
 }

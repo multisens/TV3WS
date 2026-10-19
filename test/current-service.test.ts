@@ -71,9 +71,9 @@ test('"serviceId" inteiro quando aop/services traz o @serviceId', async () => {
         { serviceId: '202', serviceName: 'Servico Um', serviceIcon: '', initialMediaURL: '' },
     ]));
     await mqtt.deliver(TOPICS.current_service, '0');
-    let r = await get({ 'Accept-Version': '2.1' });
+    let r = await get({ 'X-TV30-API-Version': '100.0' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(r.apiVersion, '2.1');
+    assert.equal(r.apiVersion, '100.0');
     assert.equal(r.json.serviceId, 101);
     assert.equal(typeof r.json.serviceId, 'number');
     assert.equal(r.json.serviceName, 'Servico Zero');

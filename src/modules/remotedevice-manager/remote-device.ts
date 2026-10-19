@@ -15,6 +15,7 @@ import {
 import { WebSocket, WebSocketServer } from "ws";
 import { removeRemoteDevice } from "./manager";
 import { closeEntryPoint } from "./entry-point";
+import { wsTls } from "../../tls";
 
 enum InterfaceType {
   area = "area",
@@ -144,8 +145,9 @@ export default class RemoteDevice {
     for (const capability of data.capabilities) {
       if (capability.name === "state") {
         newCapability.state = capability.value;
-      } else if (capability.name === "locator") {
-        newCapability.locator = capability.value;
+      } else if (capability.name === "location") {
+        // Tabela A.45 (C3, Joel 15/10); "locator" nao e mais lido
+        newCapability.location = capability.value;
       } else if (capability.name === "preparationTime") {
         newCapability.preparationTime = capability.value;
       }
@@ -314,14 +316,16 @@ export default class RemoteDevice {
     return this.supportedTypes;
   }
 
+  // A7 (Joel, 15/10): wss:// nas respostas das Tabelas C.76 e C.80 quando o
+  // ponto de entrada tem TLS (entry-point.ts); ate 15/10, sempre ws://
   public getUrl(): string {
     if (!this.wss) return "";
-    return `ws://${core.server.url}:${this.wss.options.port}`;
+    return `${wsTls() ? "wss" : "ws"}://${core.server.url}:${this.wss.options.port}`;
   }
 
   public getLocalEntryPointUrl(): string {
     if (!this.lwss) return "";
-    return `ws://${core.server.url}:${this.lwss.options.port}`;
+    return `${wsTls() ? "wss" : "ws"}://${core.server.url}:${this.lwss.options.port}`;
   }
 
   public getCapabilities(): DeviceCapabilities[] {
@@ -421,7 +425,7 @@ export default class RemoteDevice {
     lwss.on("connection", (ws) => this.onLocalClientConnection(ws));
   }
 
-  // Desativacao (DELETE /tv3/remote-device/device/{handle}, versao 2.1; a
+  // Desativacao (DELETE /tv3/remote-device/device/{handle}, versao 100.0; a
   // "C.6.15.7" de api/multi-device/index.ts e numeracao da proposta do Forum,
   // o PDF da norma vai so ate a C.6.15.5): fecha o ponto de entrada local
   // inteiro (inclusive o http.Server, que antes ficava escutando) e esquece a

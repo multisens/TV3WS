@@ -50,8 +50,10 @@ async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
     return;
   }
   // 2.0 (norma): a listagem ja entrega o ponto de entrada no campo url.
-  // 2.1 (proposta do Forum): so handles; a URL vem por GET /device/{handle}.
-  const devices = res.locals.apiVersion === '2.1'
+  // 100.0 (proposta do testbed ao Forum, D1, Joel 15/10; ate 15/10, "2.1"):
+  // so handles; a URL vem por GET /device/{handle}. A versao vem decidida
+  // pela borda (middleware/basic.ts).
+  const devices = res.locals.apiVersion === '100.0'
     ? service.getRemoteDevices(classId)
     : await service.getRemoteDevicesWithUrl(classId);
   if (!devices || devices.length === 0) {
@@ -64,17 +66,19 @@ async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
 }
 
 // As rotas por handle estao fora da Tabela C.2 da norma — existem apenas na
-// versao 2.1 (Accept-Version: 2.1). Em 2.0 respondem erro 100.
-function handleRoutesAreV21(req: Request, res: Response): boolean {
-  if (res.locals.apiVersion !== '2.1') {
-    returnError(res, 100, `${req.method} ${req.originalUrl} exists only with Accept-Version: 2.1`);
+// versao 100.0 (D1, Joel 15/10; ate 15/10, "2.1"). Pedidas com 2.0, ou sem
+// Accept-Version, a borda responde 100 (o routes.json so declara a 100.0
+// para elas); a conferencia daqui fica para quem chega sem passar pela borda.
+function handleRoutesAreV100(req: Request, res: Response): boolean {
+  if (res.locals.apiVersion !== '100.0') {
+    returnError(res, 100, `${req.method} ${req.originalUrl} exists only with Accept-Version: 100.0`);
     return false;
   }
   return true;
 }
 
 async function GETRemoteDeviceEntryPoint(req: Request, res: Response): Promise<void> {
-  if (!handleRoutesAreV21(req, res)) return;
+  if (!handleRoutesAreV100(req, res)) return;
 
   const handle = req.params.handle;
   if (!handle) {
@@ -91,7 +95,7 @@ async function GETRemoteDeviceEntryPoint(req: Request, res: Response): Promise<v
 }
 
 function DELETERemoteDeviceEntryPoint(req: Request, res: Response): void {
-  if (!handleRoutesAreV21(req, res)) return;
+  if (!handleRoutesAreV100(req, res)) return;
 
   const handle = req.params.handle;
   if (!handle) {

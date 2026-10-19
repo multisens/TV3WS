@@ -301,8 +301,9 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
     // P4 (Luis, 10/10): HDEL dos vazios e HSET dos demais numa funcao so
     // (tv30_atributos_emissora), que confere o esquema: perfil em users:index,
     // nome nao vazio e fora dos basicos protegidos, teto de 20 MB.
-    // PENDENTE (Joel): E4 — esta familia tem dois escritores (aqui e o despejo
-    // do AoP); a funcao nao decide o dono.
+    // E4 (Joel, 15/10): esta familia tem dois escritores. O tv3ws grava o
+    // conteudo; o AoP remove a familia inteira junto com o perfil, na mesma
+    // funcao do Redis (tv30_perfil_remove).
     await funcoes.atributosEmissora(uuid, scid, changed);
 
     // G9 (decisao do Luis em 12/10): aviso ao espectador depois da gravacao

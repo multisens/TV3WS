@@ -29,56 +29,46 @@ whenRedisReady('clients:authorized a partir de client:*', async () => {
 });
 connectRedis();
 
-// Endereco divulgado pela descoberta SSDP (C.3.4), resolvido uma vez no boot:
-// o /manifest (sempre servido aqui, atras da borda) e o anuncio, quando ligado
-// neste processo, saem do mesmo valor. Porta da borda invalida derruba o
-// processo com log [ssdp] FALHA (D9).
-import { loadAdvertisedEndpoint, ssdpEnabled, startSSDP } from './ssdp-server';
-import { registerManifest } from './manifest';
-const advertised = loadAdvertisedEndpoint();
-registerManifest(app, advertised);
+// /manifest (C.3.4): as portas da borda e o host de sobreposicao, resolvidos
+// no boot; o host de cada resposta sai da requisicao (src/manifest.ts).
+// Porta da borda invalida derruba o processo com log [ssdp] FALHA (D9).
+import { loadAdvertisedEndpoint, registerManifest } from './manifest';
+registerManifest(app, loadAdvertisedEndpoint());
 
-const http_server = http.createServer(app);
+// Enderecos de escuta (src/listen-hosts.ts): no host, so a propria maquina
+// por padrao (Joel, 15/10); no container, todos (TV3WS_LISTEN_HOST do compose).
+import { listenHosts } from './listen-hosts';
+const hosts = listenHosts();
 
-const httpPort = process.env.HTTP_PORT || 44642;
-http_server.listen(httpPort, () => {
-    logger.info(`TV 3.0 HTTP Webservice running on port: ${httpPort}`);
-});
-
-// HTTPS sobe apenas quando HTTPS_KEY/HTTPS_CERT (base64) estao presentes.
-// Sem eles o servico opera so em HTTP — suficiente pra subida local em
-// maquina nova sem nenhum arquivo pre-criado.
-const httpsKey = process.env.HTTPS_KEY?.trim();
-const httpsCert = process.env.HTTPS_CERT?.trim();
-if (httpsKey && httpsCert) {
-    const https_server = https.createServer({
-        key: Buffer.from(httpsKey, 'base64'),
-        cert: Buffer.from(httpsCert, 'base64')
-    }, app);
-    const httpsPort = process.env.HTTPS_PORT || 44643;
-    https_server.listen(httpsPort, () => {
-        logger.info(`TV 3.0 HTTPS Webservice running on port: ${httpsPort}`);
+const httpPort = Number(process.env.HTTP_PORT || 44642);
+for (const host of hosts) {
+    http.createServer(app).listen(httpPort, host, () => {
+        logger.info(`TV 3.0 HTTP Webservice running on ${host}:${httpPort}`);
     });
+}
+
+// HTTPS com o certificado do receptor (A7, src/tls.ts): o do .tv30/tls que o
+// compose monta (TV30_TLS_DIR), senao HTTPS_KEY/HTTPS_CERT. Sem nenhum, so
+// HTTP (o tv3ws rodando no host sem configuracao).
+import { tlsMaterial } from './tls';
+const tls = tlsMaterial();
+if (tls) {
+    const httpsPort = Number(process.env.HTTPS_PORT || 44643);
+    for (const host of hosts) {
+        https.createServer({ key: tls.key, cert: tls.cert }, app).listen(httpsPort, host, () => {
+            logger.info(`TV 3.0 HTTPS Webservice running on ${host}:${httpsPort} (certificado de ${tls.source})`);
+        });
+    }
 } else {
-    logger.info('[boot] HTTPS_KEY/HTTPS_CERT ausentes — HTTPS desabilitado (somente HTTP)');
+    logger.info('[boot] sem certificado (TV30_TLS_DIR, HTTPS_KEY/HTTPS_CERT) — HTTPS desabilitado (somente HTTP)');
 }
 
 
-// Anuncio SSDP (C.3.4). No compose quem anuncia e a borda, em rede do host
-// (L6 = opcao A, decisao do Luis em 09/10): o tv3ws da bridge roda com
-// SSDP_ENABLED=false, porque o multicast nao sai da bridge. Sozinho no host
-// (dev-host), o padrao e anunciar daqui: falha de inicio derruba o processo
-// com log claro (D9); o log de "anunciando" so sai quando o bind da 1900 conclui.
-if (ssdpEnabled()) {
-    startSSDP(advertised);
-} else {
-    logger.error(`[ssdp] anuncio desligado (SSDP_ENABLED=${process.env.SSDP_ENABLED?.trim()}); `
-        + 'o /manifest continua servido por este processo');
-    // O anunciante tratava SIGTERM/SIGINT. Sem ele, o node como PID 1 do
-    // container ignoraria o SIGTERM e o docker stop esperaria o SIGKILL.
-    process.once('SIGTERM', () => process.exit(143));
-    process.once('SIGINT', () => process.exit(130));
-}
+// Sem anunciante neste processo desde 15/10 (complemento do Joel: o anuncio
+// e do anunciante nativo do host, ./tv30 up). O node como PID 1 do container
+// ignoraria o SIGTERM, e o docker stop esperaria o SIGKILL.
+process.once('SIGTERM', () => process.exit(143));
+process.once('SIGINT', () => process.exit(130));
 
 
 if (process.send) {

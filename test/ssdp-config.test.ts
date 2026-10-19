@@ -49,11 +49,15 @@ test('avisos: host de loopback, porta fora da 44642 e Server-SecureBaseURL sem T
     for (const host of ['192.168.1.150', 'tv.local', '[fe80::1]', '10.127.0.1']) {
         assert.ok(!isLoopbackHost(host), host);
     }
-    const loop = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: 'localhost' }, ip));
-    assert.ok(loop.some(w => w.includes('loopback') && w.includes('SERVER_URL')), loop.join('\n'));
+    // so a sobreposicao fixa o host (src/manifest.ts): o loopback so avisa nela
+    const loop = advertiseWarnings(resolveAdvertisedEndpoint({ SSDP_ADVERTISE_HOST: 'localhost' }, ip));
+    assert.ok(loop.some(w => w.includes('loopback') && w.includes('SSDP_ADVERTISE_HOST')), loop.join('\n'));
+    const viaServerUrl = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: 'localhost' }, ip));
+    assert.ok(!viaServerUrl.some(w => w.includes('loopback')), viaServerUrl.join('\n'));
     const lan = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: '192.168.1.150' }, ip));
     assert.ok(!lan.some(w => w.includes('loopback') || w.includes('EDGE_HTTP_PORT')), lan.join('\n'));
-    assert.ok(lan.some(w => w.includes('SEM TLS') && w.includes('192.168.1.150:44643')), lan.join('\n'));
+    // A7: a 44643 tem TLS, e o aviso de porta sem TLS saiu
+    assert.ok(!lan.some(w => w.includes('SEM TLS')), lan.join('\n'));
     const port = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: 'tv.local', EDGE_HTTP_PORT: '8080' }, ip));
     assert.ok(port.some(w => w.includes('EDGE_HTTP_PORT=8080') && w.includes('44642')), port.join('\n'));
 });
