@@ -31,9 +31,12 @@ export const PAIRING_POPUP_TIMEOUT_MS = 120 * 1000;
 // sucesso o material sai do cliente e o challenge nao vale mais (correcao
 // de 12/10, spec-1210-seguranca item 2: controller.ts,
 // validateTokenParameters).
-// PENDENTE (Joel): se o desafio errado deve encerrar a tentativa (descartar
-// o material e fechar o pop-up) — a Tabela C.4 so diz que o 102 significa
-// "the pairing was not successfully concluded".
+// DECIDIDO (Joel, 15/10; G1 e G2): manter. O desafio errado da 102 e a
+// tentativa continua aberta, sem limite de tentativas, e o desafio nao
+// expira (a trava de 120 s fecha o pop-up e libera a camada). Numero de
+// tentativas e prazo do desafio foram levados ao Forum; revisitar com a
+// resposta. A Tabela C.4 so diz que o 102 significa "the pairing was not
+// successfully concluded".
 
 type PairingPopUp = 'qrcode' | 'pin';
 

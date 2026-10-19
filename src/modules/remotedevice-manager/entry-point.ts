@@ -1,6 +1,8 @@
 import http from "http";
+import https from "https";
 import { WebSocketServer } from "ws";
 import { ApiError } from "../../util";
+import { tlsMaterial, wsTls } from "../../tls";
 
 // Ponto de entrada WebSocket de um remote-device (C.6.15.2: "it opens a
 // socket server on a dynamically assigned port") e o ponto de entrada local
@@ -28,7 +30,7 @@ export function generateDynamicallyPort(): number {
   return Math.floor(min + Math.random() * (max - min));
 }
 
-function listen(server: http.Server, port: number): Promise<void> {
+function listen(server: http.Server | https.Server, port: number): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (err: Error) => {
       server.off("listening", onListening);
@@ -47,7 +49,10 @@ function listen(server: http.Server, port: number): Promise<void> {
 export async function openEntryPoint(): Promise<WebSocketServer> {
   for (let attempt = 1; attempt <= LISTEN_ATTEMPTS; attempt++) {
     const port = generateDynamicallyPort();
-    const server = http.createServer();
+    // A7 (Joel, 15/10): wss://, com o TLS terminado aqui e o certificado do
+    // receptor (src/tls.ts); sem certificado, ou com TV3WS_WS_TLS=false, ws://
+    const t = wsTls() ? tlsMaterial() : undefined;
+    const server = t ? https.createServer({ key: t.key, cert: t.cert }) : http.createServer();
     try {
       await listen(server, port);
     } catch (err) {

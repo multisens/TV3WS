@@ -165,13 +165,27 @@ test('nao local (pm=qrcode): reuso do clientid da 101 sem pop-up', async () => {
     expectError(await authorize(cid), 101);
 });
 
-test('local associado (Origin em origins:associated): reuso do clientid da 101', async () => {
+// A8 (Joel, 15/10): o tv3ws nunca emite credencial de classe associada.
+// Antes de 15/10, o associado recebia pop-up e refreshToken (e o reuso dava 101).
+test('local associado (Origin em origins:associated): 106 em /authorize, sem pop-up e sem registro (A8)', async () => {
     viewerAnswer = true;
     const origin = 'http://app-associada.test';
     await fakeRedis.hset('origins:associated', { [origin]: 'svc-a' });
     const cid = randomUUID();
-    assert.equal((await authorize(cid, {}, { Origin: origin })).status, 200);
-    expectError(await authorize(cid, {}, { Origin: origin }), 101);
+    const n = await popUpsDuring(async () => expectError(await authorize(cid, {}, { Origin: origin }), 106));
+    assert.equal(n, 0, 'pop-up aberto para o associado');
+    assert.ok(!members('clients:authorized').includes(cid));
+    assert.ok(!members('clients:blocked').includes(cid));
+    assert.equal(store.has(`client:${cid}`), false);
+    // com pm o cliente se classifica nao local (a classe da credencial nao e associada)
+    assert.notEqual((await authorize(randomUUID(), { pm: 'qrcode' }, { Origin: origin })).status, 106);
+});
+
+test('registro de classe associada gravado antes de 15/10: /token da 106 (A8)', async () => {
+    const cid = randomUUID();
+    await manager.AuthorizeClient(cid, 'local-associated');
+    const rt = (await manager.GetAuthorizedClient(cid)).getRefreshToken();
+    expectError(await get('/token', { clientid: cid, 'refresh-token': rt }), 106);
 });
 
 test('recusa no pop-up da 102; o clientid recusado fica bloqueado e o reuso da 101 sem pop-up', async () => {

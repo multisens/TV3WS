@@ -26,12 +26,12 @@ type CurrentServiceResponse = {
 //
 // "serviceId" e inteiro na Tabela C.8 (@serviceId do <Service> da SLT); antes
 // saia como texto ("-1", "undefined").
-// PENDENTE (Joel): lacuna L2 (A6 de decisoes-pendentes.md) — o testbed nao
-// tem SLT, e o @serviceId so existiria se alguem publicasse aop/services, que
-// nenhum modulo publica hoje. Sem valor inteiro conhecido, o campo e omitido
-// (C.3.2.2), como no item de boundServices da C.6.8.3 respondido pela borda
-// (infra/edgegateway/plugin/bindcontext.go). O serviceContextId segue a
-// constante do core (mesma lacuna).
+// O testbed nao tem SLT, e o @serviceId so existiria se alguem publicasse
+// aop/services, que nenhum modulo publica hoje. Sem valor inteiro conhecido,
+// o campo e omitido (C.3.2.2), como no item de boundServices da C.6.8.3
+// respondido pela borda (infra/edgegateway/plugin/bindcontext.go). O
+// serviceContextId e o globalServiceId do servico corrente (A6, Joel 15/10;
+// ate entao, uma constante do core).
 function GETCurrentService(req: Request, res: Response): void {
 	if (!core.app.sid) {
 		returnError(res, 300);

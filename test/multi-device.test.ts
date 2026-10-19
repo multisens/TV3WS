@@ -15,6 +15,10 @@ import { Server } from 'http';
 import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
 
+// pontos de entrada em ws:// aqui, independente do certificado da maquina
+// (o wss:// da A7 tem teste proprio: test/tls.test.ts)
+process.env.TV3WS_WS_TLS = 'false';
+
 const fake = createFakeRedis();
 const store = fake.store;
 const published: [string, string][] = [];
@@ -96,7 +100,7 @@ before(async () => {
     portRange(wsPort);
     const app = express();
     app.use(express.json());
-    app.use('/tv3', basic);   // res.locals.apiVersion (rotas por handle so na 2.1)
+    app.use('/tv3', basic);   // res.locals.apiVersion (rotas por handle so na 100.0)
     app.use('/tv3/remote-device', multiDeviceAPI);
     app.use(errorHandler);
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
@@ -118,7 +122,8 @@ const expectError = (r: { status: number; json: any }, code: number) => {
     assert.equal(r.json?.error, code, JSON.stringify(r.json));
 };
 const BODY = { deviceClass: 'teste', supportedTypes: ['light'] };
-const V21 = { 'Accept-Version': '2.1' };
+// versao decidida pela borda (D2): o fluxo por handle e a 100.0 (D1)
+const V21 = { 'X-TV30-API-Version': '100.0' };
 
 test('Redis fora do ar no registro: 404 {error:200}, sem porta aberta, sem registro nem publicacao', async () => {
     portRange(wsPort);
@@ -229,7 +234,7 @@ test('ponto de entrada local: a listagem 2.0 abre; o descadastro fecha as duas p
     assert.equal(await listening(localPort), false, 'porta do ponto de entrada local');
 });
 
-test('2.1: DELETE /device/{handle} fecha a porta local e a ativacao seguinte abre outra', async () => {
+test('100.0: DELETE /device/{handle} fecha a porta local e a ativacao seguinte abre outra', async () => {
     const devPort = await freePort();
     const localPort = await freePort();
     portRange(devPort);
@@ -259,7 +264,7 @@ test('2.1: DELETE /device/{handle} fecha a porta local e a ativacao seguinte abr
     assert.equal(await listening(nextPort), false);
 });
 
-test('2.1: pedidos simultaneos de ativacao abrem um ponto de entrada so', async () => {
+test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', async () => {
     const devPort = await freePort();
     portRange(devPort);
     const r = await call('POST', '/', BODY);

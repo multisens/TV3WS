@@ -144,7 +144,7 @@ function requestDeviceCapabilities(handle: string): CapabilitiesMetadata[] {
       type: capability.effectType,
       capabilities: [
         { name: "state", value: capability.state },
-        { name: "locator", value: capability.locator },
+        { name: "location", value: capability.location },
         {
           name: "preparationTime",
           value: capability.preparationTime,

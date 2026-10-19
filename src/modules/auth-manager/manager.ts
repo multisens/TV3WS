@@ -96,10 +96,12 @@ export async function AuthorizeClient(id: string, clientClass: ClientClass = 'lo
 // Bloqueio (recusa no pop-up; no futuro, a tela de gerenciamento): sai de
 // clients:authorized e entra em clients:blocked. /tv3/token passa a recusar
 // (nao autorizado) e a borda recusa o accessToken ja emitido (107).
-// PENDENTE (Joel): o registro client:{id} de um cliente bloqueado depois de
-// autorizado e mantido (minimo: nada se apaga); o que o desbloqueio faz com
-// ele (reaproveita o refresh token ou exige nova autorizacao) e decisao da
-// futura tela.
+// O registro client:{id} de um cliente bloqueado depois de autorizado e
+// mantido. DECIDIDO (Joel, 15/10; E5), para a futura tela de autorizacoes
+// (C.4.2.2), que ainda nao existe: o desbloqueio restaura a autorizacao
+// anterior (o mesmo clientid e refresh token voltam a valer na C.6.1.3, sem
+// nova autorizacao); a remocao apaga todo o rastro, e o clientid passa de
+// novo pelo pop-up, sem 101.
 export async function BlockClient(id: string): Promise<void> {
     authorizedClients.delete(id);
     await funcoes.clienteBloqueia(id);

@@ -49,11 +49,12 @@ function validateAppId(appid: string): boolean {
 // o package.json do tv3ws) e, sem diretorio da aplicacao conhecido
 // (core.app.url vazio), lia relativo ao diretorio corrente do tv3ws.
 // undefined = caminho recusado ou inexistente (o controller responde 305).
-// PENDENTE (Joel): sem diretorio da aplicacao conhecido (core.app.url vazio:
-// p.ex. depois da troca de servico e antes de aop/<sid>/<appId>/path) a
-// resposta e 305, lendo a Tabela C.17 ("does not exist in the application's
-// filesystem"); a outra leitura seria 200 (recurso da plataforma
-// indisponivel).
+// DECIDIDO (Joel, 15/10; G6): sem diretorio da aplicacao conhecido
+// (core.app.url vazio: p.ex. depois da troca de servico e antes de
+// aop/<sid>/<appId>/path) a resposta e 305, como era. O 200 da Tabela C.1 e
+// para recurso da plataforma; os arquivos da aplicacao vem do sinal, e a
+// Tabela C.17 so lista o 305. Ordem: 300 sem servico (H2), 302 sem sinal
+// (que o testbed nao modela), depois 305; o 305 dispara tambem em warn.
 function resolvePath(fpath: unknown): ResolvedPath | undefined {
 	return resolveInsideDir(core.app.url, fpath);
 }

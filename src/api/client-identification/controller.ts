@@ -6,6 +6,7 @@ import Client, { ClientClass, PairingMaterial } from '../../modules/auth-manager
 import redis from '../../redis-client';
 import service, { pairingMethods, Reserva } from './service';
 import { returnError, aes128ECBEncrypt, base64UrlDecode, base64UrlEncode, aes128ECBDecrypt } from '../../util';
+import { serverCert } from '../../tls';
 dotenv.config();
 
 
@@ -77,6 +78,18 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     const key = queryParam(req, 'key') as string;
     const clientClass = await classifyClient(req, pm);
     const local = clientClass !== 'non-local';
+
+    // A8 (Joel, 15/10): o tv3ws, como emissor, nunca emite credencial de
+    // classe associada. Tabela C.3: "106: If invoked from an associated local
+    // client"; o associado nao porta credencial (C.4.1.1). A borda tambem
+    // recusa, pelo Origin e nos dois modos: a recusa dela impede o uso, a
+    // daqui impede que a credencial exista. Antes de 15/10, o associado
+    // recebia pop-up e refreshToken aqui. A chamada sem Origin e limite
+    // aceito (Escopo e desenho 6.2).
+    if (clientClass === 'local-associated') {
+        returnError(res, 106, 'associated local clients do not obtain credentials (C.4.1.1); invoked from an associated local client');
+        return;
+    }
 
     if (!validateAuthorizeParameters(clientId, displayName, pm, key, local, res)) {
         return;
@@ -248,9 +261,17 @@ async function GETToken(req: Request, res: Response): Promise<void> {
     }
 
     // A classe vem do registro feito na autorizacao (P1) — nao do endereco.
-    const local = clientId !== undefined
-        ? (await manager.GetAuthorizedClient(clientId)).isLocal()
-        : true;
+    const registered = clientId !== undefined ? await manager.GetAuthorizedClient(clientId) : undefined;
+    const local = registered !== undefined ? registered.isLocal() : true;
+
+    // A8 (Joel, 15/10; Tabela C.4, "106: If invoked from an associated local
+    // client"): credencial de classe associada nao e emitida, tambem para um
+    // registro gravado antes de 15/10, quando o /authorize ainda autorizava o
+    // associado.
+    if (registered !== undefined && registered.getClass() === 'local-associated') {
+        returnError(res, 106, 'associated local clients do not obtain credentials (C.4.1.1)');
+        return;
+    }
 
     const valid = await validateTokenParameters(clientId, refreshToken, challengeResponse, local, req.protocol, res);
     if (!valid) {
@@ -263,7 +284,7 @@ async function GETToken(req: Request, res: Response): Promise<void> {
     // material do pareamento (valid.pairing). A chave simetrica que cifra a
     // primeira resposta vem dele. Se a emissao falhar antes da resposta sair,
     // o material volta ao cliente e a tentativa segue aberta, como era antes
-    // desta correcao (o pareamento nao se concluiu; ver o PENDENTE (Joel) em
+    // desta correcao (o pareamento nao se concluiu; ver a G1 em
     // service.ts sobre encerrar a tentativa).
     const { client, pairing } = valid;
     let encr: Buffer<ArrayBufferLike> | undefined;
@@ -281,7 +302,8 @@ async function GETToken(req: Request, res: Response): Promise<void> {
         if (!local && refreshToken === undefined && req.protocol == 'http') {
             logger.info(`First access of nom-local client ${clientId} send response encrypted`);
 
-            resp.serverCert = process.env.HTTPS_CERT;
+            // A7 (Joel, 15/10): o certificado do receptor, o mesmo da 44643
+            resp.serverCert = serverCert();
 
             // sem o material (nao deveria acontecer: este ramo so passa
             // pelo challenge-response conferido), nada sai em claro
@@ -376,7 +398,7 @@ async function validateTokenParameters(clientId: string, refreshToken: string, c
     // era 404 {error:200} — e o erro de padding se distinguia do hash errado
     // (102) pela resposta. Nenhum ramo daqui emite credencial: so o hash
     // conferido abaixo passa, e a tentativa segue aberta como no desafio
-    // errado (ver o PENDENTE (Joel) em service.ts).
+    // errado (ver a G1 em service.ts).
     let response: Buffer<ArrayBufferLike>;
     try {
         if (typeof challengeResponse !== 'string') throw new TypeError('challenge-response is not a single value');

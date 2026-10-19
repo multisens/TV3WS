@@ -49,7 +49,10 @@ const data: CoreData = {
   current: {
     serviceName: "",
     serviceId: -1,
-    serviceContextId: "c08b2c72-fd14-4095-adaf-2e5810850c57",
+    // A6 (Joel, 15/10): o globalServiceId do servico corrente (o BAM; Tabela
+    // 6, C.3.5), preenchido em currentService; ate 15/10, uma constante igual
+    // para todo servico
+    serviceContextId: "",
     transportStreamId: "c08b2c72-fd14-4095-adaf-2e5810850c57",
     originalNetworkId: "09e59a1d-e2e7-467e-85db-2fb5a572e2fc",
   },
@@ -77,14 +80,16 @@ function getLocalIP(): string {
 // nova aplicacao servia o diretorio da anterior ate chegar o
 // aop/<sid>/<appId>/path dela, e a mensagem vazia em aop/<sid>/currentApp
 // era ignorada (a aplicacao encerrada seguia corrente, com o diretorio
-// dela). Sem diretorio conhecido a C.6.4.7 responde 305 (ver o PENDENTE em
+// dela). Sem diretorio conhecido a C.6.4.7 responde 305 (ver a G6 em
 // api/aop-communication/app-files/service.ts).
 // Encerrar = mensagem vazia em aop/<sid>/currentApp (o que o broker entrega
-// quando o retido e apagado). PENDENTE (Joel): nao ha publicador desse topico
-// neste repositorio, e o contrato dele (como se sinaliza o fim da aplicacao)
-// nao esta escrito; vale a mensagem vazia, como nos outros topicos do testbed
-// em que '' e ausencia. Os nos (core.app.nodes) ficam como estavam: fora
-// desta correcao.
+// quando o retido e apagado). Contrato escrito pelo Joel em 15/10 (G4): o
+// appId corrente RETIDO, e a mensagem vazia retida e o fim da aplicacao
+// (DESTROY, KILL, troca de servico, saida para o catalogo); descricao no
+// infra/mqtt-broker/plugin/config/schemas.json. O publicador (o Application
+// Lifecycle Manager, ou o AoP ate ele ser extraido) ainda nao existe neste
+// repositorio. Os nos (core.app.nodes) ficam como estavam: fora desta
+// correcao.
 function setAppId(appid: string): void {
   if (data.app.id == appid) return;
 
@@ -141,7 +146,10 @@ function setAppNodes(nodes: string) {
 function currentService(sid: string): void {
   if (sid == data.app.sid) return;
 
-  if (data.app.sid && data.app.id) {
+  // a assinatura de currentApp do servico que sai vai embora sempre; ate
+  // 19/10 so saia com app corrente, e a troca de servico sem app deixava a do
+  // anterior viva (achado da verificacao de 16/10)
+  if (data.app.sid) {
     let t = mqttClient.parseTopic(TOPICS.current_app, {
       serviceId: data.app.sid,
     });
@@ -170,8 +178,17 @@ function currentService(sid: string): void {
   data.app.id = "";
   data.app.url = "";
   data.app.nodes = [];
-  data.current.serviceId = data.services[Number(sid)]?.serviceId;
-  data.current.serviceName = data.services[Number(sid)]?.serviceName;
+  // aop/services nao tem publicador (o formato e indefinido; ver o relatorio
+  // de 19/10): indexado pelo proprio id, sem Number() — com o globalServiceId
+  // em URN, Number(sid) dava NaN
+  const svc = sid ? (data.services as unknown as Record<string, { serviceId?: unknown; serviceName?: string }>)[sid] : undefined;
+  data.current.serviceId = svc?.serviceId as number;
+  data.current.serviceName = svc?.serviceName ?? '';
+  data.current.serviceContextId = sid;
+  // sem servico corrente nao ha contexto: o hash fica como estava (o esquema
+  // exige serviceContextId; a C.6.3.1 responde 300 e a borda so usa o hash
+  // para o servico corrente)
+  if (!sid) return;
 
   // P4 (Luis, 10/10): regravado inteiro pela funcao tv30_sessao_servico, que
   // confere o esquema (infra/redis/esquema.json). serviceId so inteiro em
