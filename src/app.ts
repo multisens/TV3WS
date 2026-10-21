@@ -1,51 +1,47 @@
 import express, { Application, Request, Response, NextFunction } from "express";
 
-// import middleware
+// Middlewares
 import basic from './middleware/basic';
 import { apiNotFound, errorHandler } from './util';
 
-// APIs por agrupamento do Anexo C (S1/R3): uma pasta por agrupamento em
-// src/api, com o indice do agrupamento montando as APIs-filhas.
+// APIs
 import clientIdentificationAPI from './api/client-identification';
 import aopCommunicationAPI from './api/aop-communication';
 import userAPI from './api/user';
 import multiDeviceAPI from './api/multi-device';
 import sensoryEffectAPI from './api/sensory-effect';
+import v100 from './v100.0';
 
-// middleware configuration
-// D-0510-1 (reuniao 05/10 com o Joel): toda validacao de credencial fica na
-// borda (plugin tv30-auth do edgegateway); o tv3ws so recebe e responde. Sob
-// /tv3 resta a negociacao de versao (basic); a emissao de credencial
-// (/tv3/authorize, /tv3/token) continua aqui, em client-identification.
-// A negociacao de versao vem ANTES dos leitores de corpo: o 101 de JSON
-// malformado (errorHandler) tambem leva API-Version (C.3.6.6). Antes, o
-// express.json rejeitava o corpo antes do basic e a resposta saia sem ele.
 const app: Application = express();
+
+// Sets Content-Type and API-Version for /tv3 routes
 app.use('/tv3', basic);
+
+// Includes the routes of API version 100.0
+app.use('/v100.0', v100);
+
+// Parses the request body
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// routes
+// Health check
 app.use("/health", (req: Request, res: Response) => {
   res.status(200).json({
     status: "ok",
     message: "tv3ws is running",
   });
 });
-// (a antiga rota fora-da-spec POST /tv3/users saiu: criacao de perfil e
-// funcao do gestor de perfis da PLATAFORMA — P3/M1 — nao das APIs do Anexo C)
+
+// Includes the routes for APIs
 app.use("/tv3/current-service/users", userAPI);
-app.use("/tv3/:serviceContextId/users", userAPI);   // atributos por contexto de serviço (C.6.14.2/C.6.14.5)
+app.use("/tv3/:serviceContextId/users", userAPI);
 app.use("/tv3/remote-device", multiDeviceAPI);
 app.use("/tv3/sensory-effect-renderers", sensoryEffectAPI);
-// (C.6.8, /tv3/bind-context, saiu: D-0510-2, reuniao 05/10 com o Joel — a
-// borda responde as tres rotas; aqui elas cairiam no erro 100 abaixo)
 app.use("/tv3", aopCommunicationAPI);
 app.use("/tv3", clientIdentificationAPI);
 
-// camada comum de erro (C.3.2): rota /tv3 nao mapeada -> erro 100 no
-// formato da norma; excecao nao tratada -> erro 200, nunca HTML.
-app.use("/tv3", apiNotFound);
+// Responds error 100 for unmapped routes and handles uncaught errors
+app.use(apiNotFound);
 app.use(errorHandler);
 
 export default app;
