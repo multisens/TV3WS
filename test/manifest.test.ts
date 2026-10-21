@@ -1,5 +1,4 @@
-// Teste do GET /manifest (C.3.4, D10) sem Express real: o app e o
-// agrupamento client-identification sao trocados por dubles.
+// GET /manifest (C.3.4) sem Express real: o app e o client-identification sao dubles.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -47,8 +46,6 @@ test('/manifest aponta para a borda (44642/44643); sem cabecalho de host, a cade
     assert.equal(headers['Device-FriendlyName'], 'TV 3.0 Receiver');
 });
 
-// B3 (decisao do Luis em 11/10): o navegador so deixa o JavaScript de outra
-// origem ler os cabecalhos listados em Access-Control-Expose-Headers.
 test('/manifest expoe ao navegador exatamente os cabecalhos Server-* e Device-* que envia', () => {
     const { headers } = call({ SERVER_URL: '192.168.1.150' });
     const exposed = (headers['Access-Control-Expose-Headers'] || '').split(',').map(s => s.trim());
@@ -73,10 +70,7 @@ test('/manifest usa SSDP_ADVERTISE_HOST, as portas da borda e os metadados do am
     assert.equal(headers['Device-FriendlyName'], 'Sala');
 });
 
-// Complemento do Joel (15/10), 3.4: o /manifest sai com o host pelo qual o
-// cliente o alcancou — o Host original, que a borda repassa em X-TV30-Host —,
-// para casar com o LOCATION do anunciante nativo, que detecta o IP. O
-// SSDP_ADVERTISE_HOST, definido, prevalece (como no anunciante).
+// o host e o pelo qual o cliente alcancou o /manifest, para casar com o LOCATION do anunciante
 test('/manifest com o host da requisicao (X-TV30-Host da borda), e SSDP_ADVERTISE_HOST prevalece', () => {
     let { headers } = call({ SERVER_URL: 'localhost' }, { 'X-TV30-Host': '192.168.0.23:44642', Host: 'tv3ws:44652' });
     assert.equal(headers['Server-BaseURL'], '192.168.0.23:44642');

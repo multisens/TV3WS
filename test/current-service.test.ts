@@ -1,8 +1,5 @@
-// GET /tv3/current-service (C.6.3.1, Tabela C.8) pelo app.ts inteiro, com o
-// core REAL (servico em uso vindo de aop/currentService) e redis-client e
-// mqtt-client trocados por dubles. Rodada de 10/10 (item 24): "serviceId"
-// inteiro (antes saia em texto: "-1", "undefined") e erro 300 quando nao ha
-// servico em uso.
+// GET /tv3/current-service (C.6.3.1, Tabela C.8) pelo app.ts inteiro, com o core real e Redis e MQTT por
+// dubles: "serviceId" inteiro e 300 quando nao ha servico em uso.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -64,7 +61,7 @@ test('servico em uso sem @serviceId conhecido: 200, sem "serviceId" (nem "-1"/"u
 });
 
 test('"serviceId" inteiro quando aop/services traz o @serviceId', async () => {
-    // core.ts indexa aop/services pelo valor numerico de aop/currentService
+    // core.ts indexa aop/services pelo valor de aop/currentService
     await mqtt.deliver(TOPICS.current_service, '');
     await mqtt.deliver(TOPICS.services, JSON.stringify([
         { serviceId: 101, serviceName: 'Servico Zero', serviceIcon: '', initialMediaURL: '' },
@@ -94,9 +91,6 @@ test('a plataforma desfaz a selecao (aop/currentService vazio): volta o 300', as
     assert.equal(r.json.error, 300, JSON.stringify(r.json));
 });
 
-// P4 (Luis, 10/10): o hash session:current-service sai pela funcao
-// tv30_sessao_servico, com os cinco campos e serviceId so inteiro em decimal
-// ou vazio (esquema do Redis); antes ia o texto que viesse em aop/services.
 test('session:current-service pela funcao: cinco campos, serviceId inteiro ou vazio', async () => {
     const tick = () => new Promise(r => setImmediate(r));
     await mqtt.deliver(TOPICS.current_service, '');

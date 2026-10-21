@@ -4,24 +4,9 @@ import { WebSocketServer } from "ws";
 import { ApiError } from "../../util";
 import { tlsMaterial, wsTls } from "../../tls";
 
-// Ponto de entrada WebSocket de um remote-device (C.6.15.2: "it opens a
-// socket server on a dynamically assigned port") e o ponto de entrada local
-// da C.6.15.5 (versao 2.0) e da ativacao por handle (versao 2.1, a "C.6.15.6"
-// da proposta do Forum em api/multi-device/index.ts; o PDF da norma vai so ate
-// a C.6.15.5): um http.Server proprio numa porta sorteada em
-// [WS_PORT_MIN, WS_PORT_MAX), com o WebSocketServer pendurado nele.
-//
-// - Porta ocupada (EADDRINUSE) nao derruba mais o processo: antes o listen
-//   nao tinha tratador de 'error', e a excecao nao capturada matava o tv3ws
-//   inteiro. Agora sorteia outra porta, ate LISTEN_ATTEMPTS vezes; esgotadas
-//   as tentativas, a API responde 404 {error:200} (Tabela C.74: "If the
-//   request exceeds the number of devices that can be registered on the
-//   platform"). Outro erro de listen (ex.: EACCES) tambem vira {error:200}.
-// - A porta so e entregue escutando: a URL devolvida e gravada e a da porta
-//   que de fato abriu.
-// - closeEntryPoint fecha tambem o http.Server: o ws so fecha o servidor que
-//   ele mesmo cria, e com servidor externo a porta ficava escutando depois do
-//   terminate() do dispositivo.
+// Ponto de entrada WebSocket: o do registro (C.6.15.2, "socket server on a dynamically assigned port") e o
+// local, da listagem 2.0 (C.6.15.5) ou da rota por handle (proposta do testbed, so na 100.0). Porta ocupada
+// sorteia outra; esgotadas as tentativas, 404 {error:200} (Tabela C.74). A porta so e entregue escutando.
 export const LISTEN_ATTEMPTS = 10;
 
 export function generateDynamicallyPort(): number {
@@ -49,8 +34,6 @@ function listen(server: http.Server | https.Server, port: number): Promise<void>
 export async function openEntryPoint(): Promise<WebSocketServer> {
   for (let attempt = 1; attempt <= LISTEN_ATTEMPTS; attempt++) {
     const port = generateDynamicallyPort();
-    // A7 (Joel, 15/10): wss://, com o TLS terminado aqui e o certificado do
-    // receptor (src/tls.ts); sem certificado, ou com TV3WS_WS_TLS=false, ws://
     const t = wsTls() ? tlsMaterial() : undefined;
     const server = t ? https.createServer({ key: t.key, cert: t.cert }) : http.createServer();
     try {
@@ -73,6 +56,7 @@ export async function openEntryPoint(): Promise<WebSocketServer> {
   throw new ApiError(200, `no free port for a WebSocket entry point after ${LISTEN_ATTEMPTS} attempts`);
 }
 
+// fecha tambem o http.Server: o ws so fecha o servidor que ele mesmo cria
 export function closeEntryPoint(wss: WebSocketServer): void {
   const server = wss.options.server;
   for (const client of wss.clients) client.close(1001);

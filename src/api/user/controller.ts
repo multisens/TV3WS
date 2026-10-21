@@ -21,8 +21,6 @@ async function POSTCurrentUser(req: Request, res: Response): Promise<void> {
 }
 
 async function POSTUserList(req: Request, res: Response): Promise<void> {
-	// erros de negocio (300 sem servico ativo, 101 expressao invalida) sobem
-	// como ApiError ate o errorHandler
 	const response = await service.getUserList(req.body);
 	res.status(200).json(response);
 }
@@ -55,9 +53,7 @@ function GETUserFile(req: Request, res: Response): void {
 	const path = req.query.path as string;
 	service.checkConsent(path)
 	.then((access) => {
-		// perfil dono do avatar sem consentimento: 405 (Tabela C.73; correcao
-		// de 12/10, spec-1210-defeitos3 item 2 — antes, 305; ver
-		// service.ts, checkConsent)
+		// perfil dono do avatar sem consentimento: 405 (Tabela C.73)
 		if (access === 'no-consent') {
 			returnError(res, 405, path);
 		}
@@ -65,8 +61,7 @@ function GETUserFile(req: Request, res: Response): void {
 			returnError(res, 305, path);
 		}
 		else {
-			// caminho fora de USER_THUMBS ou inexistente: 305 (Tabela C.73;
-			// correcao de 12/10, ver service.ts, getFile)
+			// caminho fora de USER_THUMBS ou inexistente: 305 (Tabela C.73)
 			const file_data = service.getFile(path);
 			if (file_data === undefined) {
 				returnError(res, 305, path);
@@ -84,9 +79,7 @@ function GETUserFile(req: Request, res: Response): void {
 }
 
 
-// C.6.14.5: POST /tv3/{scid}/users/{user-id} escreve atributos de emissora
-// (valor '' remove) e responde o JSON dos atributos alterados. Substitui o
-// antigo PUT .../broadcaster-attrs, que estava fora da Tabela C.2 (item 24).
+// C.6.14.5: valor '' remove; responde o JSON dos atributos alterados
 async function POSTUserAttributes(req: Request, res: Response): Promise<void> {
     const { userid } = req.params;
     if (!userid) {
@@ -101,9 +94,5 @@ async function POSTUserAttributes(req: Request, res: Response): Promise<void> {
     const changed = await service.writeBroadcasterAttrs(userid, scid, req.body);
     res.status(200).json(changed);
 }
-
-
-// (POSTCreateUser saiu: criacao de perfil e funcao do gestor de perfis da
-// plataforma — AoP POST /profile/create — nao endpoint das APIs de usuario)
 
 export default { GETCurrentUser, POSTCurrentUser, POSTUserList, GETUserAttribute, GETUserFile, POSTUserAttributes }

@@ -1,9 +1,5 @@
-// Cabecalho API-Version (C.3.6.6) nas respostas do tv3ws, pelo app.ts
-// inteiro (core real; redis-client e mqtt-client trocados por dubles). Toda
-// resposta, inclusive erro, leva API-Version (rodada de 10/10). Desde 15/10
-// (D2, Joel) quem negocia e a borda: o tv3ws responde na versao que ela
-// decidiu (cabecalho interno X-TV30-API-Version) e nao interpreta mais o
-// Accept-Version.
+// API-Version (C.3.6.6) em toda resposta, inclusive erro, pelo app.ts inteiro (Redis e MQTT por dubles).
+// A versao vem da borda em X-TV30-API-Version; o Accept-Version nao e interpretado aqui.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -61,7 +57,7 @@ test('sem o cabecalho interno (fora da borda): vale a 2.0 (C.3.6.5); valor fora 
     expectError(await call('/tv3/current-service', decided('x')), 300, '2.0');
 });
 
-test('o Accept-Version do cliente nao e mais interpretado aqui (D2): nem 100 nem 101 do tv3ws', async () => {
+test('o Accept-Version do cliente nao e interpretado aqui: nem 100 nem 101 do tv3ws', async () => {
     for (const v of ['3.0', '2.1', 'x', '100.0']) {
         const r = await call('/tv3/current-service', { headers: { 'Accept-Version': v } });
         expectError(r, 300, '2.0');
@@ -78,7 +74,7 @@ test('JSON malformado no corpo (101 do errorHandler) tambem leva API-Version', a
     expectError(await call('/tv3/remote-device', init('100.0')), 101, '100.0');
 });
 
-test('resposta de sucesso: API-Version = a versao decidida', async () => {
+test('resposta de sucesso: API-Version = a versao negociada pela borda', async () => {
     await mqtt.deliver(TOPICS.current_service, 'urn:tv30:service:teste');
     const r = await call('/tv3/current-service', decided('100.0'));
     assert.equal(r.status, 200, JSON.stringify(r.json));

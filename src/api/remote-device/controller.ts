@@ -2,8 +2,6 @@ import { Request, Response } from "express";
 import service from "./service";
 import { returnError } from "../../util";
 
-// Registro e remocao esperam o armazenamento (D-0510-6): falha do Redis sobe
-// como excecao e o errorHandler responde 404 {error:200}.
 async function POSTRemoteDevice(req: Request, res: Response): Promise<void> {
   const body = req.body;
   if (!body) {
@@ -41,18 +39,14 @@ async function DELETERemoteDevice(req: Request, res: Response): Promise<void> {
   res.status(204).json({});
 }
 
-// Abrir o ponto de entrada local e assincrono (porta ocupada -> outra porta;
-// esgotadas, 404 {error:200} pelo errorHandler).
+// abrir o ponto de entrada e assincrono: porta ocupada -> outra porta; esgotadas, 404 {error:200}
 async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
   const classId = req.params["classId"];
   if (!classId) {
     returnError(res, 105, "classId");
     return;
   }
-  // 2.0 (norma): a listagem ja entrega o ponto de entrada no campo url.
-  // 100.0 (proposta do testbed ao Forum, D1, Joel 15/10; ate 15/10, "2.1"):
-  // so handles; a URL vem por GET /device/{handle}. A versao vem decidida
-  // pela borda (middleware/basic.ts).
+  // 2.0: a listagem ja traz a url. 100.0: so handles; a url vem por GET /device/{handle}.
   const devices = res.locals.apiVersion === '100.0'
     ? service.getRemoteDevices(classId)
     : await service.getRemoteDevicesWithUrl(classId);
@@ -65,10 +59,8 @@ async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
   });
 }
 
-// As rotas por handle estao fora da Tabela C.2 da norma — existem apenas na
-// versao 100.0 (D1, Joel 15/10; ate 15/10, "2.1"). Pedidas com 2.0, ou sem
-// Accept-Version, a borda responde 100 (o routes.json so declara a 100.0
-// para elas); a conferencia daqui fica para quem chega sem passar pela borda.
+// Rotas por handle: proposta do testbed, fora da Tabela C.2, so na versao 100.0. A borda ja responde 100
+// nas outras versoes; esta conferencia e para quem chega sem passar por ela.
 function handleRoutesAreV100(req: Request, res: Response): boolean {
   if (res.locals.apiVersion !== '100.0') {
     returnError(res, 100, `${req.method} ${req.originalUrl} exists only with Accept-Version: 100.0`);

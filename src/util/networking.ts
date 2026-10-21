@@ -15,9 +15,3 @@ export function getLocalIP(): string {
     }
     return '127.0.0.1';
 }
-
-// Classe de cliente nao se infere de endereco (P1): e decidida na
-// autorizacao (client-identification/controller.ts, classifyClient) e
-// conferida na borda (D-0510-1, reuniao 05/10 com o Joel). Sairam daqui o
-// isLocalClient (faixa RFC1918) e o getClientIP/findIPinReq que so servia a
-// ele.

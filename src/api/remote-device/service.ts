@@ -20,12 +20,8 @@ export type DeviceResponse = {
 
 type RemoteDevice = ReturnType<typeof manager.getDeviceByHandle> & {};
 
-// A porta e aberta ANTES do registro (entry-point.ts): a URL gravada e
-// devolvida e a da porta que de fato escuta, e porta ocupada vira nova
-// tentativa em vez de derrubar o processo. Se o armazenamento falhar
-// (D-0510-6), o addRemoteDevice chama o terminate() do dispositivo, que fecha
-// o servidor: a API responde 404 {error:200} e nao fica porta aberta sem
-// dispositivo.
+// A porta abre antes do registro: a URL gravada e a da porta que de fato escuta. Se o armazenamento
+// falhar, addRemoteDevice fecha o servidor: nao fica porta aberta sem dispositivo.
 async function createWebSocket(body: ReqBody): Promise<Response> {
   const wsServer = await openEntryPoint();
   const uuid = uuidv4();
@@ -43,11 +39,8 @@ function deleteWebSocket(handle: string): Promise<boolean> {
   return manager.removeRemoteDevice(handle);
 }
 
-// Garante um ponto de entrada local para o dispositivo e devolve a URL.
-// Reusa o existente — a listagem 2.0 pode ser chamada varias vezes. Abrir a
-// porta agora e assincrono (entry-point.ts); pedidos simultaneos para o mesmo
-// dispositivo esperam a mesma abertura, em vez de abrir dois servidores e
-// deixar um escutando sem dono.
+// Reusa o ponto de entrada existente (a listagem 2.0 pode vir varias vezes); pedidos simultaneos esperam a
+// mesma abertura, em vez de abrir dois servidores e deixar um sem dono.
 const pendingLocalEntryPoints = new Map<string, Promise<string>>();
 
 function ensureLocalEntryPoint(device: RemoteDevice): Promise<string> {
@@ -72,8 +65,7 @@ function ensureLocalEntryPoint(device: RemoteDevice): Promise<string> {
   return pending;
 }
 
-// Versao 2.1 (proposta em discussao no Forum): lista so handles; o ponto de
-// entrada vem depois, por GET /device/{handle}.
+// versao 100.0: so handles; a url vem por GET /device/{handle}
 function getRemoteDevices(classId: string): Device[] | undefined {
   const devices = manager.getDevicesByClass(classId);
   if (!devices) return undefined;
@@ -84,8 +76,7 @@ function getRemoteDevices(classId: string): Device[] | undefined {
   }));
 }
 
-// Versao 2.0 (norma, C.6.15.5): a listagem por classe ja entrega o ponto de
-// entrada de cada dispositivo no campo url — nao existem rotas por handle.
+// versao 2.0 (C.6.15.5): a listagem ja traz a url de cada dispositivo
 async function getRemoteDevicesWithUrl(classId: string): Promise<Device[] | undefined> {
   const devices = manager.getDevicesByClass(classId);
   if (!devices) return undefined;

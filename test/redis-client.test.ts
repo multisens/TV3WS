@@ -1,8 +1,5 @@
-// D-0510-6 (reuniao 05/10 com o Joel): cliente Redis que falha rapido e de
-// forma explicita. Usa o ioredis REAL contra uma porta fechada e contra um
-// servidor TCP que aceita e nao responde (Redis congelado); sem Redis de
-// verdade. O singleton do modulo e preguicoso (lazyConnect): importar nao
-// abre socket.
+// Cliente Redis que falha rapido e explicitamente: ioredis real contra porta fechada e contra servidor que
+// aceita e nao responde (Redis congelado). O singleton e lazyConnect: importar nao abre socket.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net, { AddressInfo } from 'net';

@@ -6,10 +6,7 @@ dotenv.config();
 
 export type TokenAlg = "HS256" | "HS512" | "RS256" | "RS512";
 
-// A classe de cliente viaja NA credencial (P1): decidida uma vez na
-// autorizacao e gravada no token emitido aqui. Quem LE a credencial e a
-// borda (D-0510-1, reuniao 05/10 com o Joel: toda validacao de credencial
-// fica no plugin tv30-auth do edgegateway; o tv3ws so emite).
+// A classe viaja na credencial; quem a confere e a borda (o tv3ws so emite).
 type TokenPayload = {
     iat: number;
     nbf: number;
@@ -26,22 +23,12 @@ const jwtIssuer = process.env.JWT_ISSUER || 'GenericIssuer';
 // duracao, nao instante).
 const ACCESS_TOKEN_TTL = 24 * 60 * 60;
 
-// P5: a autorizacao de cliente vive no ARMAZENAMENTO e sobrevive a reinicio:
+// Autorizacao no Redis, que sobrevive a reinicio:
 // - client:{id}         HASH  classe e credenciais emitidas;
 // - clients:authorized  SET   clientids autorizados pelo espectador;
-// - clients:blocked     SET   clientids recusados/bloqueados (a borda
-//                             recusa o token deles com 107).
-// D-0510-4 (reuniao 05/10 com o Joel): os AUTORIZADOS tambem ficam num
-// conjunto, base da futura tela de gerenciamento (o espectador bloqueia e
-// desbloqueia). Invariante: um clientid esta em no maximo um dos dois
-// conjuntos. O Map em memoria e so cache do objeto vivo, que carrega tambem o
-// material efemero de pareamento (secret/challenge/ECDH), valido apenas
-// durante o handshake.
-// P4 (Luis, 10/10): toda escrita destas chaves passa pelas funcoes do Redis
-// (../../redis-funcoes.ts): autorizar e bloquear sao UMA funcao cada (antes,
-// transacoes MULTI), que tambem confere o esquema do client:{id} (classe,
-// refreshToken) e mantem a invariante; a inclusao do boot tambem (antes, um
-// script EVAL daqui).
+// - clients:blocked     SET   clientids recusados (a borda recusa o token deles com 107).
+// Um clientid fica em no maximo um dos conjuntos; as funcoes do Redis (redis-funcoes.ts) mantem isso.
+// O Map em memoria e cache do objeto vivo, que carrega tambem o material de pareamento.
 import redis from '../../redis-client';
 import * as funcoes from '../../redis-funcoes';
 
@@ -71,10 +58,7 @@ export async function isAuthorized(id: string): Promise<boolean> {
     return (await redis.sismember(AUTHORIZED_KEY, id)) === 1;
 }
 
-// Situacao de um clientid para a C.6.1.2 (101 no reuso, Tabela C.3):
-// 'blocked' = recusado/bloqueado pelo espectador; 'used' = ja autorizado
-// neste receptor (inclusive registro client:{id} anterior ao conjunto
-// clients:authorized); 'new' = nunca visto.
+// Para o 101 no reuso de clientid (C.6.1.2, Tabela C.3). 'used' inclui quem so tem o registro client:{id}.
 export type ClientIdStatus = 'new' | 'used' | 'blocked';
 
 export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
@@ -93,21 +77,13 @@ export async function AuthorizeClient(id: string, clientClass: ClientClass = 'lo
     authorizedClients.set(id, client);
 }
 
-// Bloqueio (recusa no pop-up; no futuro, a tela de gerenciamento): sai de
-// clients:authorized e entra em clients:blocked. /tv3/token passa a recusar
-// (nao autorizado) e a borda recusa o accessToken ja emitido (107).
-// O registro client:{id} de um cliente bloqueado depois de autorizado e
-// mantido. DECIDIDO (Joel, 15/10; E5), para a futura tela de autorizacoes
-// (C.4.2.2), que ainda nao existe: o desbloqueio restaura a autorizacao
-// anterior (o mesmo clientid e refresh token voltam a valer na C.6.1.3, sem
-// nova autorizacao); a remocao apaga todo o rastro, e o clientid passa de
-// novo pelo pop-up, sem 101.
+// /tv3/token passa a recusar, e a borda recusa o accessToken ja emitido (107). O registro client:{id}
+// fica, para que um desbloqueio (tela da C.4.2.2, nao implementada) restaure a autorizacao.
 export async function BlockClient(id: string): Promise<void> {
     authorizedClients.delete(id);
     await funcoes.clienteBloqueia(id);
 }
 
-// Base da futura tela de gerenciamento (D-0510-4): so leitura, sem UI.
 export async function listAuthorizedClients(): Promise<string[]> {
     return (await redis.smembers(AUTHORIZED_KEY)).sort();
 }
@@ -116,11 +92,8 @@ export async function listBlockedClients(): Promise<string[]> {
     return (await redis.smembers(BLOCKED_KEY)).sort();
 }
 
-// Clientes autorizados antes do conjunto clients:authorized existir so tem
-// client:{id}. Roda uma vez no boot (server.ts): poe no conjunto todo
-// client:{id} que nao esteja bloqueado. O teste-e-insercao e atomico (funcao
-// tv30_cliente_inclui_autorizado; antes, script EVAL) para nao furar a
-// invariante se um bloqueio acontecer no meio.
+// Boot: poe em clients:authorized todo client:{id} nao bloqueado. Teste e insercao atomicos
+// (tv30_cliente_inclui_autorizado), para um bloqueio no meio nao furar a invariante.
 export async function backfillAuthorizedClients(): Promise<number> {
     let cursor = '0';
     let added = 0;
@@ -173,10 +146,7 @@ function createAccessToken(alg: TokenAlg, clientId: string, clientClass: ClientC
 }
 
 
-// Devolve [token, expiresIn] com expiresIn em SEGUNDOS RESTANTES (duracao,
-// C.6.1.3) — o valor antigo carregava o instante de expiracao. Reaproveita o
-// token ja emitido enquanto ele valer (parte da emissao, nao validacao de
-// requisicao).
+// expiresIn em segundos restantes (duracao, C.6.1.3); reaproveita o token ja emitido enquanto ele valer
 export async function getClientAccessToken(id: string): Promise<[string, number]> {
     const client = await GetAuthorizedClient(id);
     const now = Math.floor(Date.now() / 1000);

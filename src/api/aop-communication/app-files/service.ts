@@ -42,19 +42,8 @@ function validateAppId(appid: string): boolean {
 }
 
 
-// Correcao de 12/10 (spec-1210-seguranca2, item 1): o caminho pedido e
-// resolvido dentro do diretorio da aplicacao (core.app.url) e nao sai dele
-// (regras em util/safe-path.ts). Antes, path.join(core.app.url, path) lia
-// qualquer arquivo que o processo alcancasse (path=../package.json devolvia
-// o package.json do tv3ws) e, sem diretorio da aplicacao conhecido
-// (core.app.url vazio), lia relativo ao diretorio corrente do tv3ws.
-// undefined = caminho recusado ou inexistente (o controller responde 305).
-// DECIDIDO (Joel, 15/10; G6): sem diretorio da aplicacao conhecido
-// (core.app.url vazio: p.ex. depois da troca de servico e antes de
-// aop/<sid>/<appId>/path) a resposta e 305, como era. O 200 da Tabela C.1 e
-// para recurso da plataforma; os arquivos da aplicacao vem do sinal, e a
-// Tabela C.17 so lista o 305. Ordem: 300 sem servico (H2), 302 sem sinal
-// (que o testbed nao modela), depois 305; o 305 dispara tambem em warn.
+// undefined = caminho recusado ou inexistente (305). Sem diretorio conhecido (core.app.url vazio, p.ex.
+// logo apos a troca de servico) tambem 305, e nao 200: os arquivos vem do sinal, e a Tabela C.17 so lista o 305.
 function resolvePath(fpath: unknown): ResolvedPath | undefined {
 	return resolveInsideDir(core.app.url, fpath);
 }
@@ -74,18 +63,9 @@ function getFile(entry: ResolvedPath): FileData {
 }
 
 
-// Listagem de diretorio da Tabela C.17 (p. 231; p. 249 do PDF): "If path is
-// a directory, the response is formatted in JSON and contains the first-level
-// structure of this directory" e "If the path is omitted, the response is
-// formatted in JSON and contains the first-level structure of the application
-// from its base directory", no formato
-// {"files": [{"name", "size"}], "dirs": [{"name"}]}. Antes, path omitido dava
-// 105 e diretorio dava 404 {error:200} (EISDIR).
-// Escolhas da implementacao (a tabela nao trata): arquivo comum vai em
-// "files" com o tamanho em bytes e diretorio em "dirs"; link simbolico entra
-// pelo destino e so se o destino estiver dentro do diretorio da aplicacao (o
-// mesmo que a leitura aceitaria); outros tipos (socket, fifo) e nomes com
-// barra invertida (que a leitura recusa) ficam de fora; ordem por nome.
+// Listagem de primeiro nivel da Tabela C.17: {"files": [{"name", "size"}], "dirs": [{"name"}]}. Fora do
+// que a tabela trata: link simbolico vale pelo destino, so dentro da base; socket, fifo e nome com barra
+// invertida ficam de fora; ordem por nome.
 export type DirListing = {
 	files: { name: string, size: number }[],
 	dirs: { name: string }[]

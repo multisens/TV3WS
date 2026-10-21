@@ -1,5 +1,5 @@
-// Teste de unidade do endereco divulgado pela descoberta SSDP (C.3.4, D10):
-// host = SSDP_ADVERTISE_HOST > SERVER_URL > IP local; portas da borda.
+// Endereco divulgado pela descoberta SSDP (C.3.4): host = SSDP_ADVERTISE_HOST > SERVER_URL > IP local;
+// portas da borda.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -42,7 +42,7 @@ test('LOCATION e cabecalhos do /manifest apontam para a borda', () => {
     assert.equal(secureBaseURL(custom), 'tv.local:8443');
 });
 
-test('avisos: host de loopback, porta fora da 44642 e Server-SecureBaseURL sem TLS (L3)', () => {
+test('avisos: host de loopback e porta fora da 44642; nenhum aviso de falta de TLS', () => {
     for (const host of ['localhost', 'tv.localhost', '127.0.0.1', '127.1.2.3', '::1', '[::1]']) {
         assert.ok(isLoopbackHost(host), host);
     }
@@ -56,7 +56,7 @@ test('avisos: host de loopback, porta fora da 44642 e Server-SecureBaseURL sem T
     assert.ok(!viaServerUrl.some(w => w.includes('loopback')), viaServerUrl.join('\n'));
     const lan = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: '192.168.1.150' }, ip));
     assert.ok(!lan.some(w => w.includes('loopback') || w.includes('EDGE_HTTP_PORT')), lan.join('\n'));
-    // A7: a 44643 tem TLS, e o aviso de porta sem TLS saiu
+    // a 44643 tem TLS: nao ha aviso de porta sem TLS
     assert.ok(!lan.some(w => w.includes('SEM TLS')), lan.join('\n'));
     const port = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: 'tv.local', EDGE_HTTP_PORT: '8080' }, ip));
     assert.ok(port.some(w => w.includes('EDGE_HTTP_PORT=8080') && w.includes('44642')), port.join('\n'));

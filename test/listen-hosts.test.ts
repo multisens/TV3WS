@@ -1,5 +1,4 @@
-// Enderecos de escuta do tv3ws (Joel, 15/10: no dev-host, a porta so pode ser
-// alcancavel da propria maquina, por padrao).
+// Enderecos de escuta: fora do container, so a propria maquina por padrao.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { NetworkInterfaceInfo } from 'os';

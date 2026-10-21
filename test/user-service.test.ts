@@ -1,10 +1,5 @@
-// APIs de usuario (C.6.14) com redis-client e mqtt-client trocados por dubles.
-// Reuniao 05/10 com o Joel:
-// - D-0510-5 (P5, um dono por familia de chave): o tv3ws so LE perfis — nao
-//   assina aop/users, nao semeia users:index no boot e nao grava lastAccess
-//   (quem grava e a plataforma, aop/src/core.js);
-// - D-0510-6: erro de Redis em pipeline nao vira resposta "valida" (lista
-//   vazia, 300, 305): a API responde 404 {error:200}.
+// APIs de usuario (C.6.14) com Redis e MQTT por dubles. O tv3ws so le perfis (nao assina aop/users, nao semeia
+// users:index, nao grava lastAccess); erro de Redis em pipeline vira 404 {error:200}, nao resposta "valida".
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -16,8 +11,7 @@ import { createFakeRedis } from './helpers/fake-redis';
 
 const fake = createFakeRedis();
 const store = fake.store;
-// ids de perfil em UUID (Tabela 7; decisao do Luis em 11/10, F-3): o duble
-// nao confere o esquema, mas os ids sao do formato que o Redis aceita
+// ids de perfil em UUID (Tabela 7): o duble nao confere o esquema, mas os ids sao do formato que o Redis aceita
 const U1 = '0b6f3e2a-7c1d-4e5f-9a8b-2c3d4e5f6a7b';
 const U9 = '9d8c7b6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const PX = '3f2e1d0c-9b8a-4f7e-a6d5-c4b3a2918070';
@@ -45,7 +39,7 @@ stub('mqtt-client', {
     TOPICS: { current_user: 'aop/currentUser', current_service: 'aop/currentService' },
 });
 
-// a semeadura antiga lia este arquivo quando users:index estava vazio
+// arquivo de perfis valido, para conferir que o tv3ws nao semeia users:index com ele
 process.env.USER_DATA_FILE = path.join(__dirname, '..', 'user-files', 'userData.json');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -90,7 +84,7 @@ function seedProfiles(svc: string) {
     store.set(`user:${U1}:consent`, new Set([svc]));
 }
 
-// --- D-0510-5 ---------------------------------------------------------------------
+// --- so leitura de perfis ----------------------------------------------------------
 test('nao assina aop/users; assina aop/currentUser e aop/currentService', () => {
     assert.ok(!handlers.has('aop/users'));
     assert.ok(handlers.has('aop/currentUser'));
@@ -117,7 +111,7 @@ test('POST current-user (C.6.14.4): grava a sessao e publica retido, sem lastAcc
     assert.equal((store.get(`user:${U1}`) as Record<string, string>).lastAccess, undefined);
 });
 
-// --- D-0510-6 ---------------------------------------------------------------------
+// --- falha do Redis -----------------------------------------------------------------
 test('Redis normal: a listagem C.6.14.1 devolve o perfil visivel', async () => {
     seedProfiles('svc-a');
     const r = await call('POST', '/current-service/users', {});
@@ -125,7 +119,7 @@ test('Redis normal: a listagem C.6.14.1 devolve o perfil visivel', async () => {
     assert.deepEqual(r.json, { users: [{ id: U1 }] });
 });
 
-test('pipeline com erro: C.6.14.1 responde 404 {error:200} (antes: 300 sem servico)', async () => {
+test('pipeline com erro: C.6.14.1 responde 404 {error:200}', async () => {
     seedProfiles('svc-a');
     fake.setDown(true, 'batches');
     try {
@@ -133,7 +127,7 @@ test('pipeline com erro: C.6.14.1 responde 404 {error:200} (antes: 300 sem servi
     } finally { fake.setDown(false); }
 });
 
-test('pipeline com erro: arquivo de perfil (C.6.14.6) responde 404 {error:200} (antes: 305)', async () => {
+test('pipeline com erro: arquivo de perfil (C.6.14.6) responde 404 {error:200}', async () => {
     seedProfiles('svc-a');
     fake.setDown(true, 'batches');
     try {
@@ -151,7 +145,7 @@ test('Redis fora do ar: current-user e atributos respondem 404 {error:200}', asy
     } finally { fake.setDown(false); }
 });
 
-// --- P4 (Luis, 10/10): escritas pelas funcoes do Redis -----------------------------
+// --- escritas pelas funcoes do Redis -------------------------------------------------
 test('escritas da sessao saem por FCALL (tv30_sessao_usuario, tv30_sessao_servico_id)', async () => {
     fake.fcalls.length = 0;
     await handlers.get('aop/currentUser')!(U9);
@@ -206,12 +200,8 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
     }
 });
 
-// --- 12/10 (spec-1210-seguranca2, item 1): arquivo de perfil (C.6.14.6) --------
-// O mesmo defeito da C.6.4.7: o caminho pedido era juntado a USER_THUMBS com
-// path.join e lido sem conferir se ficava dentro dele; bastava o mesmo texto
-// no campo avatar de um perfil com consentimento (o AoP grava o avatar do
-// POST /profile/create sem conferir formato). Agora: fora de USER_THUMBS,
-// inexistente ou que nao e arquivo da 305 (Tabela C.73).
+// --- arquivo de perfil (C.6.14.6) -----------------------------------------------------
+// fora de USER_THUMBS, inexistente ou que nao e arquivo: 305 (Tabela C.73)
 test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o conteudo; dentro, 200', async () => {
     const fsm = await import('fs');
     const osm = await import('os');
@@ -234,8 +224,7 @@ test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o 
         const ok = await call('GET', '/current-service/users/files?path=a.png');
         assert.equal(ok.status, 200, ok.text);
         assert.equal(ok.text, 'PNG');
-        // sem consentimento: 405 desde a rodada spec-1210-defeitos3 (caso
-        // abaixo); era 305
+        // sem consentimento: 405 (caso abaixo)
         store.set(`user:${U1}:consent`, new Set(['outro']));
         expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
     } finally {
@@ -244,11 +233,7 @@ test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o 
     }
 });
 
-// --- 12/10 (spec-1210-defeitos3, item 2): C.6.14.6 sem consentimento -----------
-// Tabela C.73 (p. 333; p. 351 do PDF): "405: If the user has not granted access
-// to the broadcaster corresponding to the informed service" e "305: If a
-// non-existent <path> is specified in the receiver". Antes, o perfil sem
-// consentimento dava 305, como o caminho de ninguem.
+// --- C.6.14.6 sem consentimento: 405; caminho de ninguem: 305 (Tabela C.73) ------------
 test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com consentimento, 200; de ninguem, 305', async () => {
     const fsm = await import('fs');
     const osm = await import('os');
@@ -284,7 +269,7 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
         store.set(`user:${U1}:consent`, new Set(['svc-b']));
         expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
 
-        // arquivo que existe mas nao e avatar de ninguem: 305, como antes
+        // arquivo que existe mas nao e avatar de ninguem: 305
         seedProfiles('svc-a');
         expectError(await call('GET', '/current-service/users/files?path=solto.png'), 305);
         // avatar de perfil com consentimento, arquivo inexistente: 305
@@ -298,12 +283,9 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
     }
 });
 
-// --- G8 (decisao do Luis em 12/10): avatar = nome de arquivo das miniaturas ------
-// Tabela 7: "avatar" e "file path". A plataforma grava o SVG em
-// <USER_DATA_PATH>/thumbs/<id>.svg (= USER_THUMBS daqui) e o campo avatar
-// recebe o nome do arquivo. Tabela C.73 (C.6.14.6): Content-Type "according to
-// the MIME type of the file (derived from its extension...)"; antes, o SVG
-// saia como application/octet-stream.
+// --- avatar = nome de arquivo das miniaturas ------------------------------------------
+// Tabela 7: "avatar" e "file path"; a plataforma grava <id>.svg em USER_THUMBS. Tabela C.73: Content-Type
+// pela extensao do arquivo.
 const AVATAR_CARGA = 'c3167a18-5dc5-4a6e-9b1d-3f2a7c5e8d10.svg';
 
 test('C.6.14.6: Content-Type pela extensao (svg, png, jpg, jpeg, webp); outra extensao, application/octet-stream', async () => {
@@ -352,17 +334,12 @@ test('C.6.14.2: o avatar sai como esta no perfil (o nome do arquivo), no JSON e 
     assert.equal(r.text, AVATAR_CARGA);
 });
 
-// --- G9 (decisao do Luis em 12/10): aviso ao usuario na C.6.14.5 -----------------
-// Tabela C.72 (p. 332; p. 350 do PDF), "Restrictions": "it is necessary to
-// notify the user that the application wants to change/add the attribute".
-// Depois de gravar com sucesso, o tv3ws publica (nao retido) em
-// aop/display/layers/popup/info {"value": "A emissora <servico> atualizou os
-// dados do perfil <apelido>.", "timeout": 5000}. Nada muda -> nada publica;
-// gravacao que falha -> nada publica.
+// --- aviso ao usuario na C.6.14.5 (Tabela C.72, "Restrictions") -----------------------
+// Gravacao com mudanca publica, nao retido, em aop/display/layers/popup/info; sem mudanca ou com falha, nada.
 const INFO = 'aop/display/layers/popup/info';
 const infos = () => published.filter(([t]) => t === INFO);
 
-test('C.6.14.5 (G9): gravacao com mudanca publica o aviso (nao retido) com o id do servico e o apelido', async () => {
+test('C.6.14.5: gravacao com mudanca publica o aviso (nao retido) com o id do servico e o apelido', async () => {
     seedProfiles('svc-a');
     store.delete(`user:${U1}:broadcaster-attrs:svc-a`);
     published.length = 0;
@@ -372,7 +349,7 @@ test('C.6.14.5 (G9): gravacao com mudanca publica o aviso (nao retido) com o id 
     assert.deepEqual(infos(), [[INFO, JSON.stringify({ value: 'A emissora svc-a atualizou os dados do perfil Um.', timeout: 5000 }), false]]);
 });
 
-test('C.6.14.5 (G9): o nome do servico corrente (session:current-service) quando a gravacao e nele; outro scid, o id dele', async () => {
+test('C.6.14.5: o nome do servico corrente (session:current-service) quando a gravacao e nele; outro scid, o id dele', async () => {
     seedProfiles('svc-a');
     store.set('session:current-service', { serviceContextId: 'x', serviceName: 'Canal Teste', serviceId: '', transportStreamId: 't', originalNetworkId: 'o' });
     store.set(`user:${U1}:consent`, new Set(['svc-a', 'svc-b']));
@@ -394,7 +371,7 @@ test('C.6.14.5 (G9): o nome do servico corrente (session:current-service) quando
     } finally { store.delete('session:current-service'); }
 });
 
-test('C.6.14.5 (G9): perfil sem apelido -> "...dados do perfil."', async () => {
+test('C.6.14.5: perfil sem apelido -> "...dados do perfil."', async () => {
     seedProfiles('svc-a');
     store.set(`user:${U1}`, { id: U1, avatar: 'a.png' });
     store.delete(`user:${U1}:broadcaster-attrs:svc-a`);
@@ -403,7 +380,7 @@ test('C.6.14.5 (G9): perfil sem apelido -> "...dados do perfil."', async () => {
     assert.equal(JSON.parse(infos()[0][1]).value, 'A emissora svc-a atualizou os dados do perfil.');
 });
 
-test('C.6.14.5 (G9): nada mudou (mesmo valor, remocao do que nao existe) -> sem aviso; mudanca ou remocao do que existe -> aviso', async () => {
+test('C.6.14.5: nada mudou (mesmo valor, remocao do que nao existe) -> sem aviso; mudanca ou remocao do que existe -> aviso', async () => {
     seedProfiles('svc-a');
     store.delete(`user:${U1}:broadcaster-attrs:svc-a`);
     assert.equal((await call('POST', `/svc-a/users/${U1}`, { cor: 'azul', tam: 'G' })).status, 200);
@@ -422,7 +399,7 @@ test('C.6.14.5 (G9): nada mudou (mesmo valor, remocao do que nao existe) -> sem 
     assert.equal(infos().length, 2);
 });
 
-test('C.6.14.5 (G9): gravacao que falha nao avisa (recusa da funcao, Redis fora, 101, 305, 405, 300)', async () => {
+test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101, 305, 405, 300)', async () => {
     seedProfiles('svc-a');
     published.length = 0;
     const errorOrig = console.error;
@@ -449,7 +426,7 @@ test('C.6.14.5 (G9): gravacao que falha nao avisa (recusa da funcao, Redis fora,
     assert.deepEqual(infos(), []);
 });
 
-test('C.6.14.5 (G9): falha ao montar o aviso (Redis) depois da gravacao: a API responde o sucesso e loga', async () => {
+test('C.6.14.5: falha ao montar o aviso (Redis) depois da gravacao: a API responde o sucesso e loga', async () => {
     seedProfiles('svc-a');
     store.delete(`user:${U1}:broadcaster-attrs:svc-a`);
     published.length = 0;

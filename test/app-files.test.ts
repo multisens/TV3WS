@@ -1,14 +1,6 @@
-// GET /tv3/current-service/apps/<appId>/files (C.6.4.7, Tabela C.17) pelo
-// app.ts inteiro, com o core REAL (aplicacao corrente e diretorio dela vindos
-// de aop/<sid>/currentApp e aop/<sid>/<appId>/path) e redis-client e
-// mqtt-client trocados por dubles. O diretorio da aplicacao e uma arvore
-// temporaria; ao lado dele ficam um arquivo e um diretorio de FORA.
-// Rodada de 12/10 (spec-1210-seguranca2, item 1): o caminho nao sai do
-// diretorio da aplicacao (305; antes, path=../package.json devolvia o arquivo,
-// scratchpad/seguranca-1210/appfiles-traversal.js) e o path omitido ou de
-// diretorio responde a listagem da Tabela C.17 (antes, 105 e 404 {error:200}).
-// Rodada de 12/10 (spec-1210-defeitos3, item 1): troca e encerramento da
-// aplicacao zeram o diretorio dela (core.ts, setAppId).
+// GET /tv3/current-service/apps/<appId>/files (C.6.4.7, Tabela C.17) pelo app.ts inteiro, com o core real e
+// Redis e MQTT por dubles. O diretorio da aplicacao e uma arvore temporaria, com um arquivo e um diretorio
+// de fora ao lado.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -102,7 +94,7 @@ test('path que sai do diretorio da aplicacao (.., codificado, barra invertida, N
     // C:): path.relative devolve caminho absoluto; no Linux vira relativo a base
     const otherDrive = path.join(process.cwd(), 'package.json').replace(/\\/g, '/');
     const cases = [
-        'path=../segredo.txt',                    // o caso medido (../package.json)
+        'path=../segredo.txt',
         'path=..%2fsegredo.txt',
         'path=%2e%2e%2fsegredo.txt',
         'path=%2E%2E/segredo.txt',
@@ -156,13 +148,13 @@ test('arquivo dentro do diretorio da aplicacao: 200 com o conteudo e o MIME da e
     assert.match(h.type, /^application\/octet-stream/);
 });
 
-test('arquivo inexistente: 305 (antes, 404 {error:200} com ENOENT)', async () => {
+test('arquivo inexistente: 305', async () => {
     expect305(await files('path=nao-existe.txt'), 'nao-existe.txt');
     expect305(await files('path=sub/nao-existe/x.txt'), 'sub/nao-existe/x.txt');
     expect305(await files('path=a.txt/x'), 'a.txt/x');   // ENOTDIR
 });
 
-test('path omitido, vazio ou "/": listagem do primeiro nivel da aplicacao no formato da Tabela C.17 (antes, 105)', async () => {
+test('path omitido, vazio ou "/": listagem do primeiro nivel da aplicacao no formato da Tabela C.17', async () => {
     // arq-fora.txt e link-fora (destino fora) nao entram; link-dentro entra
     // pelo destino
     const expected = {
@@ -219,24 +211,19 @@ test('appId que nao e o da aplicacao corrente: 305; o appId nao entra no caminho
     }
 });
 
-test('Range em video dentro do diretorio: 206 com o trecho (comportamento mantido)', async () => {
+test('Range em video dentro do diretorio: 206 com o trecho', async () => {
     const r = await files('path=video.mp4', APP, { Range: 'bytes=2-5' });
     assert.equal(r.status, 206);
     assert.equal(r.type, 'video/mp4');
     assert.deepEqual([...r.raw], [2, 3, 4, 5]);
 });
 
-// Rodada de 12/10 (spec-1210-defeitos3, item 1): trocar de aplicacao zera o
-// diretorio (core.app.url). Antes, a nova aplicacao servia o diretorio da
-// anterior ate chegar o .../path dela, e a mensagem vazia em currentApp
-// (aplicacao encerrada) era ignorada: a encerrada seguia servindo.
 test('troca de aplicacao: a nova nao serve o diretorio da anterior antes do .../path dela; encerrar zera o diretorio', async () => {
     const outraDir = path.join(root, 'outra-app');
     fs.mkdirSync(outraDir);
     fs.writeFileSync(path.join(outraDir, 'b2.txt'), 'conteudo da outra');
     try {
         await mqtt.deliver(`aop/${SID}/currentApp`, 'app1b');
-        // antes: 200 com o a.txt (e a listagem) da app1
         expect305(await files('path=a.txt', 'app1b'), 'a.txt da anterior, pela nova');
         expect305(await files(undefined, 'app1b'), 'listagem da anterior, pela nova');
         expect305(await files('path=a.txt'), 'app1 nao e mais a corrente');
@@ -250,7 +237,7 @@ test('troca de aplicacao: a nova nao serve o diretorio da anterior antes do .../
         await mqtt.deliver(`aop/${SID}/${APP}/path`, appDir);
         expect305(await files('path=a.txt', 'app1b'), '.../path atrasado da anterior');
 
-        // encerrar: mensagem vazia em currentApp (antes: ignorada, 200)
+        // encerrar: mensagem vazia em currentApp
         await mqtt.deliver(`aop/${SID}/currentApp`, '');
         expect305(await files('path=b2.txt', 'app1b'), 'b2.txt depois de encerrar');
         expect305(await files(undefined, 'app1b'), 'listagem depois de encerrar');
@@ -278,8 +265,7 @@ test('troca de aplicacao: a nova nao serve o diretorio da anterior antes do .../
 test('sem diretorio da aplicacao conhecido (core.app.url vazio): 305, sem ler relativo ao diretorio corrente do tv3ws', async () => {
     await mqtt.deliver(TOPICS.current_service, '2');
     await mqtt.deliver('aop/2/currentApp', 'app2');
-    // o cwd do npm test e o tv3ws, que tem package.json; antes, este pedido
-    // devolvia o package.json do tv3ws
+    // o cwd do npm test e o tv3ws, que tem package.json
     assert.ok(fs.existsSync(path.join(process.cwd(), 'package.json')));
     const r = await files('path=package.json', 'app2');
     expect305(r, 'package.json sem base');

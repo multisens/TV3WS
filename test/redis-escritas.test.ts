@@ -1,15 +1,5 @@
-// P4 (decisao do Luis em 10/10, "Funcoes + auditoria"): teste ESTATICO — o
-// tv3ws so grava nas familias do alcance (session:*, client:*, clients:*,
-// user:{id}:broadcaster-attrs:*) pelo adaptador src/redis-funcoes.ts, que
-// chama as funcoes do Redis. Falha se outro arquivo de src/ chamar comando de
-// escrita no cliente Redis (set, hset, sadd, del, eval, multi, call...). A
-// unica escrita direta permitida e o espelho remote-devices:* /
-// remote-device:* (fora do alcance), e esse arquivo nao pode citar chave do
-// alcance.
-//
-// As regras e a lista de familias vem de infra/redis (verificador
-// infra/redis/test/escritas.js e esquema infra/redis/esquema.json): o teste
-// precisa do TV30 com os submodulos (tv3ws/ ao lado de infra/).
+// Teste estatico: em src/, so redis-funcoes.ts escreve nas familias do Redis; a excecao e o espelho
+// remote-device*. As regras vem de infra/redis/test/escritas.js: precisa do TV30 com os submodulos.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';

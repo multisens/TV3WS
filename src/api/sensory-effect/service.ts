@@ -31,13 +31,8 @@ function getRendererMetadata(rendererId: string) {
   };
 }
 
-// C3 (Joel, 15/10): nomes de propriedade validos no comando da C.6.16.3. A
-// Tabela C.83 remete ao Anexo A ("The specification of the possible sensory
-// effect properties can be found in Annex A"): as propriedades da Tabela A.30
-// e os atributos de posicao do efeito da A.3.19 (no NCL, atributos de
-// <region> sao valores possiveis de propriedade do no <effect>). Nome fora
-// dos dois conjuntos da 101 ("If any of the fields in the message body has
-// an invalid value"). Ate 15/10 o nome era repassado sem conferencia.
+// Propriedades validas no comando da C.6.16.3: a Tabela C.83 remete ao Anexo A (Tabela A.30 e posicao do
+// efeito da A.3.19, atributos de <region> no NCL). Nome fora delas da 101.
 const EFFECT_PROPERTIES = new Set([
   // Tabela A.30
   "intensityValue", "color", "scent", "frequency",

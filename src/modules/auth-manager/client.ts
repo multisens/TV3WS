@@ -1,8 +1,7 @@
 import { randomBytes, ECDH } from 'crypto';
 import { base64UrlEncode, safeEqual } from '../../util';
 
-// Classes de cliente da norma (C.4.1.1), decididas na autorizacao (P1) e
-// gravadas na credencial — nunca inferidas de endereco de rede.
+// Classes de cliente (C.4.1.1), definidas na autorizacao e gravadas na credencial, nunca pelo endereco.
 export type ClientClass = 'local-associated' | 'local-autonomous' | 'non-local';
 
 // Material efemero do pareamento do cliente nao local (C.4.3, C.6.1.2.2):
@@ -48,9 +47,7 @@ export default class Client {
         return this.clientClass !== 'non-local';
     }
 
-    // Rehidrata um cliente persistido no armazenamento (P5). O material de
-    // pareamento (secret/challenge/ECDH) e efemero por natureza — vive so
-    // durante o handshake — e nao e restaurado.
+    // Rehidrata um cliente do Redis; o material de pareamento e efemero e nao e restaurado.
     public restore(refreshToken: string, accessToken?: string): void {
         this.refreshToken = refreshToken;
         if (accessToken) this.accessToken = accessToken;
@@ -65,12 +62,7 @@ export default class Client {
         return this.refreshToken;
     }
 
-    // Correcao de 12/10 (spec-1210-seguranca2, item 3): comparacao em tempo
-    // constante (safeEqual, util/encryption.ts); antes "==", que para no
-    // primeiro caractere diferente, e aceitava lista (?refresh-token=a&
-    // refresh-token=b chega como ['a','b'], e ['a','b'] == 'a,b'). So texto
-    // vale; o formato do refresh token e o mesmo (Tabela C.4: "defined by the
-    // server implementation").
+    // Tempo constante, e so texto vale: ?refresh-token=a&refresh-token=b chega como lista.
     public validateRefreshToken(refreshToken: string): boolean {
         if (typeof refreshToken !== 'string') return false;
         return safeEqual(Buffer.from(this.refreshToken, 'utf8'), Buffer.from(refreshToken, 'utf8'));
@@ -84,27 +76,17 @@ export default class Client {
         return this.challenge;
     }
 
-    // Correcao de 12/10 (spec-1210-seguranca2, item 3): o challenge-response
-    // decifrado (Tabela C.4: SHA-256 da string decifrada, cifrado com a chave
-    // simetrica) e comparado em BYTES e em tempo constante com o SHA-256
-    // guardado. Antes os dois lados eram convertidos com .toString() (UTF-8):
-    // byte que nao forma UTF-8 valido vira U+FFFD, e respostas com bytes
-    // diferentes nessas posicoes passavam como iguais; e "==" nao e tempo
-    // constante. O que o cliente manda nao muda.
+    // Bytes, em tempo constante: com .toString() UTF-8, byte invalido vira U+FFFD, e respostas diferentes
+    // passariam como iguais.
     public validateChallenge(response: Buffer<ArrayBufferLike>): boolean {
         return this.challenge !== undefined && safeEqual(this.challenge, response);
     }
 
-    // Ha challenge esperando resposta (pareamento em andamento).
     public hasPendingChallenge(): boolean {
         return this.challenge !== undefined && this.secret !== undefined;
     }
 
-    // Correcao de 12/10 (spec-1210-seguranca, item 2): o challenge vale uma
-    // vez. Tira do cliente e devolve o material do pareamento; quem chama
-    // (controller do /tv3/token, logo depois de conferir o
-    // challenge-response) usa a chave para cifrar a primeira resposta e, se
-    // a emissao falhar, devolve o material com restorePairingMaterial.
+    // O challenge vale uma vez. Se a emissao falhar, quem chama devolve o material com restorePairingMaterial.
     public takePairingMaterial(): PairingMaterial {
         const material: PairingMaterial = { challenge: this.challenge, secret: this.secret, ECDHKey: this.ECDHKey };
         this.challenge = undefined;

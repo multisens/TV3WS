@@ -2,21 +2,14 @@ import core from "../../core";
 import mqttClient, { TOPICS } from "../../mqtt-client";
 import redis from "../../redis-client";
 import { execOrThrow } from "../../util/redis-result";
-import { ReqBody } from "../../api/multi-device/service";
+import { ReqBody } from "../../api/remote-device/service";
 import RemoteDevice, { AppNode } from "./remote-device";
 import { WebSocketServer } from "ws";
 import { CapabilitiesMetadata } from "./types";
 
-// P5: os METADADOS do registro (handle, classe, tipos suportados) sao
-// espelhados no armazenamento (remote-devices:index + remote-device:{h} +
-// remote-devices:class:{c}) — observaveis por outros componentes. Os
-// WebSockets vivos ficam necessariamente na memoria do processo; por isso
-// o espelho e LIMPO no boot: apos reinicio nao ha socket sobrevivente, e
-// entrada orfa mentiria sobre dispositivos conectados.
-// D-0510-6 (reuniao 05/10 com o Joel): a gravacao do espelho deixou de ser
-// promessa solta com .catch que so logava. Registro e remocao esperam o
-// armazenamento; se ele falhar, nada muda (memoria e Redis ficam como
-// estavam) e a API responde 404 {error:200}.
+// Os metadados do registro sao espelhados no Redis (remote-devices:index, remote-device:{h},
+// remote-devices:class:{c}) para outros componentes. Os WebSockets so existem na memoria do processo,
+// por isso o espelho e limpo no boot: entrada orfa mentiria sobre dispositivos conectados.
 const devices = new Map<string, RemoteDevice>();
 const devclasses = new Map<string, string[]>();
 
@@ -132,7 +125,6 @@ function getDeviceByHandle(handle: string): RemoteDevice | undefined {
   return devices.get(handle);
 }
 
-// Allows SEPE to request the capabilities of a device whenever it needs
 function requestDeviceCapabilities(handle: string): CapabilitiesMetadata[] {
   const device = devices.get(handle);
   if (!device) throw new Error(`Device with handle ${handle} not found`);

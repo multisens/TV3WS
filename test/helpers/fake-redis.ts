@@ -1,17 +1,6 @@
-// Duble de Redis em memoria para os testes de unidade (sem servidor). Cobre
-// so os comandos que o tv3ws usa. Falha injetavel imitando o ioredis com o
-// Redis fora do ar: comando avulso REJEITA; pipeline RESOLVE com [erro, null]
-// em cada entrada; MULTI rejeita no EXEC. setDown(true, 'batches') derruba so
-// pipeline/MULTI (para exercitar o tratamento do resultado por entrada).
-//
-// P4 (Luis, 10/10): as escritas do tv3ws nas familias do alcance sao
-// call('FCALL', <funcao tv30>, 0, ...args) (src/redis-funcoes.ts). O duble
-// imita o EFEITO de cada funcao usada pelo tv3ws, sem conferir o esquema — a
-// conferencia e testada no Redis real (infra/redis/test/funcoes.test.js) e
-// o contrato adaptador x funcao em infra/redis/test/contrato.test.js.
-// recusar(funcao, mensagem) faz a funcao responder como o Redis responde a
-// dado fora do esquema (erro TV30ESQUEMA), para testar o caminho de falha;
-// fcalls guarda cada chamada [funcao, ...args].
+// Duble de Redis em memoria, so com os comandos que o tv3ws usa. Falha injetavel como o ioredis com o Redis
+// fora: comando avulso rejeita, pipeline resolve [erro, null] por entrada, MULTI rejeita no EXEC. FCALL imita
+// o efeito das funcoes tv30 sem conferir o esquema (testado em infra/redis/test); recusar() simula TV30ESQUEMA.
 type Value = string | Set<string> | Record<string, string>;
 
 export const FAKE_REDIS_ERROR = 'redis indisponivel (duble de teste)';

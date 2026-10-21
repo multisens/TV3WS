@@ -10,11 +10,7 @@ import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
 
-// --- session state (read from Redis; the tv3ws also keeps the current service
-// in memory, core.app.sid, mirrored from aop/currentService) ---
-// currentUser e currentService NAO sao mantidos em memoria. Toda leitura
-// vai pro Redis em runtime, garantindo consistencia mesmo se a state for
-// alterada externamente (outro tv3ws, escrita direta, MQTT perdido etc).
+// Sessao lida do Redis a cada chamada, para valer mesmo se alterada por fora.
 
 const KEY_CURRENT_USER    = 'session:current-user';
 const KEY_CURRENT_SERVICE = 'session:current-service-id';
@@ -27,11 +23,8 @@ async function readCurrentService(): Promise<string> {
     return (await redis.get(KEY_CURRENT_SERVICE)) ?? '';
 }
 
-// Retorna o service ativo APENAS se for "conhecido" — i.e. pelo menos um user
-// tem consent pra ele. Um service obsoleto/retido (ex: aop/currentService preso
-// no broker apos um restart, cujo SID ninguem consentiu) eh tratado como "sem
-// service ativo". Sem esse guard o filtro de consent esconde TODOS os perfis e
-// o profile-chooser fica vazio, travando o workflow do AoP.
+// Servico ativo so se algum perfil tiver consent para ele: um aop/currentService retido no broker, sem
+// consent de ninguem, esconderia todos os perfis e travaria o profile-chooser do AoP.
 async function resolveActiveService(): Promise<string> {
     const currentService = await readCurrentService();
     if (!currentService) return '';
@@ -48,19 +41,8 @@ async function resolveActiveService(): Promise<string> {
 }
 
 
-// --- MQTT handlers ---
-
-// D-0510-5 (reuniao 05/10 com o Joel; P5, um dono por familia de chave): os
-// perfis (users:index, user:{id}, user:{id}:consent) sao da PLATAFORMA — o
-// gestor de perfis do AoP cria, despeja (P3) e grava o lastAccess quando o
-// usuario corrente muda (aop/src/core.js). A carga inicial do redis so
-// provisiona o banco vazio. Este servico so LE perfis: sairam daqui o
-// syncUsersFromFile (aop/users e semeadura no boot com USER_DATA_FILE) e a
-// escrita do lastAccess. Resta a sessao (session:*), espelho dos topicos.
-// P4 (Luis, 10/10): a escrita passa pelas funcoes do Redis
-// (../../redis-funcoes.ts), que conferem o esquema; valor fora dele (ex.: id
-// com mais de 64 caracteres, o mesmo teto do topico no broker) e recusado e o
-// handler MQTT loga a falha.
+// Os perfis (users:index, user:{id}, user:{id}:consent) sao da plataforma (gestor de perfis do AoP); aqui
+// so se le. A sessao espelha os topicos; valor fora do esquema e recusado, e o handler MQTT loga.
 async function updateCurrentUser(m: string): Promise<void> {
     await funcoes.sessaoUsuario(m);
 }
@@ -72,8 +54,6 @@ async function updateCurrentService(m: string): Promise<void> {
 mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
 mqttClient.addTopicHandler(TOPICS.current_service, updateCurrentService);
 
-
-// --- Expression evaluator ---
 
 function compareValues(userVal: string, op: string, filterVal: string): boolean {
     const a = isNaN(Number(userVal)) ? userVal : Number(userVal);
@@ -100,24 +80,18 @@ function matchExpression(fields: Record<string, string>, expr: Expression): bool
 }
 
 
-// --- API methods ---
-
 async function getCurrentUser(): Promise<string> {
     return await readCurrentUser();
 }
 
-// C.6.14.4: o lastAccess do perfil (despejo P3) e gravado pela plataforma ao
-// receber aop/currentUser (D-0510-5), nao aqui.
+// C.6.14.4: o lastAccess do perfil e gravado pela plataforma ao receber aop/currentUser, nao aqui
 async function setCurrentUser(uuid: string): Promise<void> {
     await funcoes.sessaoUsuario(uuid);
     mqttClient.publish(TOPICS.current_user, uuid, true);
 }
 
 async function getUserList(body: Expression): Promise<UsersIdList> {
-    // C.6.14.1: a restricao de divulgacao vale SEMPRE — sem servico DTV em
-    // uso a chamada falha com erro 300 (a antiga excecao "sem servico lista
-    // tudo" atendia o profile-chooser, que hoje le o armazenamento direto
-    // como funcao da plataforma).
+    // C.6.14.1: a restricao de divulgacao vale sempre; sem servico DTV em uso, 300
     const currentService = await resolveActiveService();
     if (!currentService) throw new ApiError(300);
 
@@ -178,10 +152,8 @@ export type AttributeResult =
     | { kind: 'text'; value: string }
     | { kind: 'json'; attrs: Record<string, string> };
 
-// C.6.14.2: com atributo na query a resposta e o VALOR em texto puro; sem
-// atributo, o JSON com todos os atributos (basicos + de emissora) no
-// contexto de servico informado. A chave de query E o nome do atributo
-// (aceita-se tambem o legado ?attribute=<nome>).
+// C.6.14.2: atributo na query (a chave e o nome; aceita tambem ?attribute=<nome>) -> valor em texto puro;
+// sem atributo -> JSON com os basicos e os de emissora do contexto informado.
 async function getUserAttributes(uuid: string, scidParam: string | undefined, query: Record<string, unknown>): Promise<AttributeResult> {
     const scid = await resolveScid(scidParam);
     await assertUserVisible(uuid, scid);
@@ -208,17 +180,9 @@ async function getUserAttributes(uuid: string, scidParam: string | undefined, qu
     return { kind: 'json', attrs: { ...basics, ...broadcaster } };
 }
 
-// C.6.14.6: o arquivo pedido e o avatar de algum perfil? E esse perfil
-// concedeu acesso ao broadcaster do servico corrente?
-// - 'granted': de um perfil com consentimento (o arquivo pode ser lido);
-// - 'no-consent': so de perfis SEM consentimento. Correcao de 12/10
-//   (spec-1210-defeitos3, item 2): o controller responde 405, o codigo da
-//   Tabela C.73 (p. 333; p. 351 do PDF): "405: If the user has not granted
-//   access to the broadcaster corresponding to the informed service
-//   (<service-context-id>)". Antes, 305, o mesmo do caminho inexistente;
-// - 'no-owner': nao e o avatar de nenhum perfil (305, como antes).
-// O servico conferido segue o corrente (session:current-service-id), e nao
-// o <service-context-id> da URL, como antes desta correcao.
+// C.6.14.6: o arquivo e o avatar de um perfil que deu acesso ao servico ('granted')? So de perfis sem
+// acesso: 'no-consent' (405, Tabela C.73); de nenhum perfil: 'no-owner' (305). O servico conferido e o
+// corrente (session:current-service-id), nao o <service-context-id> da URL.
 export type AvatarAccess = 'granted' | 'no-consent' | 'no-owner';
 
 async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
@@ -245,19 +209,10 @@ async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
 }
 
 
-// (createUser saiu: criacao de perfil e funcao do gestor de perfis da
-// PLATAFORMA — aop/src/modules/profile-manager — que escreve direto no
-// armazenamento com o teto de P3. Isso tambem elimina o segundo escritor
-// do userData.json — defeito 8 da vacina.)
-
-
-// --- Broadcaster attributes (C.6.14.5) ---
-
 // Basicos que a norma proibe redefinir no contexto de um broadcaster.
 const PROTECTED_BASICS = ['id', 'nickname', 'parentalControl', 'maxContentRating'];
 
-// P3: quota da area privativa por perfil x contexto de servico (10.3.3 da
-// norma: ate 20 MB de dados privados por combinacao).
+// quota da area privativa por perfil x contexto de servico (10.3.3: ate 20 MB por combinacao)
 const PRIVATE_AREA_QUOTA_BYTES = 20 * 1024 * 1024;
 
 // C.6.14.5: escreve/cria atributos de emissora; valor '' remove o atributo.
@@ -286,10 +241,8 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
         if (val === '') toDel.push(k); else toSet[k] = val;
     }
 
-    // quota da area privativa (P3): mede o hash resultante antes de gravar,
-    // para responder com a mensagem da quota. A funcao do Redis confere o
-    // mesmo teto de novo no resultado, ja de forma atomica (o HGETALL daqui e
-    // a gravacao nao sao uma operacao so).
+    // mede o hash resultante antes de gravar, para responder com a mensagem da quota; a funcao do Redis
+    // confere o mesmo teto de novo, ja de forma atomica
     const current = await redis.hgetall(key);
     const merged: Record<string, string> = { ...current, ...toSet };
     toDel.forEach(k => delete merged[k]);
@@ -298,17 +251,11 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
         throw new ApiError(200, `private data quota (20 MB) exceeded for this profile and service context`);
     }
 
-    // P4 (Luis, 10/10): HDEL dos vazios e HSET dos demais numa funcao so
-    // (tv30_atributos_emissora), que confere o esquema: perfil em users:index,
-    // nome nao vazio e fora dos basicos protegidos, teto de 20 MB.
-    // E4 (Joel, 15/10): esta familia tem dois escritores. O tv3ws grava o
-    // conteudo; o AoP remove a familia inteira junto com o perfil, na mesma
-    // funcao do Redis (tv30_perfil_remove).
+    // HDEL dos vazios e HSET dos demais numa funcao so, que confere o esquema. A familia tem dois
+    // escritores: o tv3ws grava o conteudo; o AoP a remove junto com o perfil (tv30_perfil_remove).
     await funcoes.atributosEmissora(uuid, scid, changed);
 
-    // G9 (decisao do Luis em 12/10): aviso ao espectador depois da gravacao
-    // bem-sucedida, so quando algum valor mudou de fato (ver notifyUserOfWrite).
-    // Gravacao recusada ou com erro sobe acima e nao avisa.
+    // avisa o espectador so depois de gravar e se algum valor mudou; gravacao com erro nao avisa
     if (attributesChanged(current, toSet, toDel)) {
         await notifyUserOfWrite(uuid, scid);
     }
@@ -316,34 +263,20 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
 }
 
 
-// --- Aviso ao usuario (C.6.14.5) ---
-
-// G9 (decisao do Luis em 12/10). Tabela C.72 (p. 332; p. 350 do PDF),
-// "Restrictions": "it is necessary to notify the user that the application
-// wants to change/add the attribute". O tv3ws publica um aviso informativo na
-// camada grafica do AoP (aop/public/js/popup.js, tipo 'info'): so informa,
-// depois de gravar; nao pede confirmacao antes. Nao retido (um aviso velho nao
-// volta quando a pagina da TV reconecta).
+// Tabela C.72, "Restrictions": "it is necessary to notify the user that the application wants to
+// change/add the attribute". Aviso informativo depois de gravar, sem confirmacao; nao retido, para um
+// aviso velho nao voltar quando a pagina da TV reconecta.
 export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
 export const INFO_POPUP_TIMEOUT_MS = 5000;
 
-// Algum valor mudou? Gravar o mesmo valor ou remover atributo que nao existe
-// nao muda nada e nao avisa. O estado anterior e o HGETALL feito antes da
-// gravacao (para a quota), que nao e atomico com ela: uma escrita concorrente
-// no meio pode fazer o aviso sair (ou nao) pela comparacao com o estado lido.
+// O estado anterior e o HGETALL da quota, que nao e atomico com a gravacao: uma escrita concorrente no meio
+// pode mudar o resultado.
 function attributesChanged(before: Record<string, string>, toSet: Record<string, string>, toDel: string[]): boolean {
     return Object.entries(toSet).some(([k, v]) => before[k] !== v) || toDel.some(k => k in before);
 }
 
-// Texto: "A emissora <servico> atualizou os dados do perfil <apelido>.".
-// - servico: o serviceName do servico corrente (session:current-service,
-//   Tabela C.8; o mesmo que a C.6.3.1 responde) quando a gravacao e no
-//   contexto do servico corrente; sem nome (o testbed nao publica
-//   aop/services, e o nome fica vazio) ou com outro <service-context-id>, o
-//   id do servico da gravacao;
-// - apelido: o nickname do perfil (user:{id}); sem ele, "...do perfil.".
-// Falha ao montar ou publicar o aviso vai para o log: os atributos ja foram
-// gravados, e a resposta da API continua a de sucesso.
+// <servico> e o serviceName do servico corrente se a gravacao for nele e o nome existir; senao, o id do
+// servico. Falha no aviso so vai para o log: os atributos ja foram gravados.
 async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
     try {
         const [nickname, currentService] = await Promise.all([
@@ -362,24 +295,10 @@ async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
 }
 
 
-// --- File serving ---
-
 type FileData = { size: number; mime: string; name: string; file: string };
 
-// Correcao de 12/10 (spec-1210-seguranca2, item 1, o mesmo defeito da
-// C.6.4.7): o caminho e resolvido dentro de USER_THUMBS e nao sai dele
-// (regras em ../../util/safe-path.ts). Antes, path.join(USER_THUMBS, path)
-// lia qualquer arquivo que o processo alcancasse, desde que o mesmo texto
-// estivesse no campo avatar de um perfil com consentimento para o servico
-// (checkConsent) — e o avatar era gravado pela plataforma sem conferencia de
-// formato (aop/src/modules/profile-manager/service.js, createProfile, a
-// partir do corpo do POST /profile/create). Desde a decisao do Luis em 12/10
-// (G8), o avatar e o nome de um arquivo deste diretorio, que a plataforma
-// gera (<id do perfil>.svg); a conferencia daqui continua valendo para
-// qualquer valor do campo. undefined = recusado,
-// inexistente ou que nao e arquivo: o controller responde 305 (Tabela C.73,
-// p. 333; p. 351 do PDF: "305: If a non-existent <path> is specified in the
-// receiver"); antes, o inexistente dava 404 {error:200} (ENOENT).
+// Resolvido dentro de USER_THUMBS seja qual for o valor do campo avatar. undefined = recusado, inexistente
+// ou nao arquivo (305, Tabela C.73).
 function getFile(fpath: string): FileData | undefined {
     const entry = resolveInsideDir(process.env.USER_THUMBS, fpath);
     if (entry === undefined || !entry.stat.isFile()) return undefined;
@@ -395,14 +314,8 @@ function getFile(fpath: string): FileData | undefined {
     };
 }
 
-// Tabela C.73 (p. 333; p. 351 do PDF): "the value of the Content-Type header
-// shall be defined according to the MIME type of the file (derived from its
-// extension, considering the MIME types supported by TV 3.0 AoP)". G8
-// (decisao do Luis em 12/10): as extensoes do nome do avatar (svg, png, jpg,
-// jpeg, webp; aop/src/modules/profile-manager/avatar.js); antes, o SVG que o
-// AoP passou a gravar saia como application/octet-stream e o webp tambem. O
-// resto segue application/octet-stream, como a C.6.4.7 manda quando o tipo
-// nao e conhecido (Tabela C.17, p. 231; p. 249 do PDF).
+// Tabela C.73: Content-Type pelo MIME derivado da extensao. Estas sao as do avatar; o resto sai
+// application/octet-stream, como na C.6.4.7 (Tabela C.17).
 const MIME_BY_EXT: Record<string, string> = {
     '.svg': 'image/svg+xml',
     '.png': 'image/png',

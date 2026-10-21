@@ -75,9 +75,7 @@ export type EffectType =
   | "SprayingType"
   | "FogType";
 export type State = "preparing" | "prepared" | "playing" | "stopped" | "idle";
-// C3 (Joel, 15/10): na versao da norma do projeto a capacidade de posicao
-// do aparelho se chama "location" (Tabela A.45, "NCL 3D location type"); o
-// "locator" de antes era de outra versao do texto.
+// a capacidade de posicao do aparelho e "location" (Tabela A.45, "NCL 3D location type")
 export type DeviceLocation = string;
 export type PreparationTime = number;
 

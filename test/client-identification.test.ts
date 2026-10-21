@@ -1,13 +1,6 @@
-// Teste de fumaca HTTP de GET /tv3/authorize e GET /tv3/token (C.6.1.2,
-// C.6.1.3): o router real sobre um Express minimo, com redis-client e core
-// trocados por dubles em memoria (sem Redis, sem MQTT, pop-up respondido pelo
-// duble). Confere a decisao de 03/10 (Luis): clientid ja usado da 101, para
-// qualquer classe, sem nova consulta ao espectador (Tabela C.3; C.6.1.4.4).
-// E, da reuniao de 05/10 com o Joel: D-0510-4 (conjunto clients:authorized,
-// coerente com clients:blocked e com o 101) e D-0510-6 (Redis fora do ar da
-// 404 {error:200}, sem travar). Rodada de 10/10: PIN do kex com quatro
-// digitos (C.4.3.3). Rodada de 12/10 (spec-1210-seguranca): parametro vazio
-// vale como ausente (105) e o challenge vale uma vez (102 na repeticao).
+// GET /tv3/authorize e GET /tv3/token (C.6.1.2, C.6.1.3): router real sobre um Express minimo, Redis e core
+// por dubles (pop-up respondido pelo duble). Clientid ja usado da 101 sem nova consulta (Tabela C.3;
+// C.6.1.4.4), clients:authorized x clients:blocked, Redis fora, PIN de 4 digitos, vazio = ausente, challenge unico.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -35,7 +28,7 @@ const fakeCore = {
     async showYesNoPopUpAsync(_msg: string, _timeout: number) { yesNoPopUps++; return viewerAnswer; },
     showQRCodePopUp(key: string, _timeout: number) { qrKeys.push(key); /* sem MQTT */ },
     showPINPopUp(pin: string, _timeout: number) { pins.push(pin); /* sem MQTT */ },
-    // fechamento no fim do pareamento (12/10; conferido em pairing-popup.test.ts)
+    // fechamento no fim do pareamento (conferido em pairing-popup.test.ts)
     closeQRCodePopUp() { /* sem MQTT */ },
     closePINPopUp() { /* sem MQTT */ },
 };
@@ -59,10 +52,8 @@ const manager = require('../src/modules/auth-manager/manager') as typeof import(
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
-// Desde a noite de 12/10 (decisao do Luis), o QR code ou o PIN de um
-// pareamento na tela faz o /tv3/authorize seguinte receber 103; varios casos
-// daqui deixam o pareamento aberto de proposito. Cada caso comeca com a
-// camada grafica livre (os casos do 103 estao em pairing-popup.test.ts).
+// O QR code ou o PIN na tela faz o /tv3/authorize seguinte receber 103, e varios casos daqui deixam o
+// pareamento aberto: cada caso comeca com a camada livre (os do 103 estao em pairing-popup.test.ts).
 beforeEach(() => _camadaParaTestes.limpar());
 
 // --- servidor ------------------------------------------------------------------
@@ -70,8 +61,7 @@ let server: Server;
 let base = '';
 before(async () => {
     const app = express();
-    // x-teste-https: req.protocol vale 'https' (chegada por HTTPS, que este
-    // servidor de teste nao tem; casos de 12/10, spec-1210-seguranca)
+    // x-teste-https: req.protocol vale 'https' (chegada por HTTPS, que este servidor de teste nao tem)
     app.use((req, _res, next) => {
         if (req.get('x-teste-https')) Object.defineProperty(req, 'protocol', { value: 'https' });
         next();
@@ -113,7 +103,6 @@ test('local autonomo: primeira autorizacao da refreshToken; reuso do clientid da
     assert.equal(first!.status, 200);
     assert.equal(typeof first!.json.refreshToken, 'string');
 
-    // antes da decisao de 03/10 este segundo /authorize reemitia o refresh token
     let again: Awaited<ReturnType<typeof authorize>> | undefined;
     assert.equal(await popUpsDuring(async () => { again = await authorize(cid); }), 0);
     expectError(again!, 101);
@@ -165,9 +154,8 @@ test('nao local (pm=qrcode): reuso do clientid da 101 sem pop-up', async () => {
     expectError(await authorize(cid), 101);
 });
 
-// A8 (Joel, 15/10): o tv3ws nunca emite credencial de classe associada.
-// Antes de 15/10, o associado recebia pop-up e refreshToken (e o reuso dava 101).
-test('local associado (Origin em origins:associated): 106 em /authorize, sem pop-up e sem registro (A8)', async () => {
+// o tv3ws nunca emite credencial de classe associada
+test('local associado (Origin em origins:associated): 106 em /authorize, sem pop-up e sem registro', async () => {
     viewerAnswer = true;
     const origin = 'http://app-associada.test';
     await fakeRedis.hset('origins:associated', { [origin]: 'svc-a' });
@@ -181,7 +169,7 @@ test('local associado (Origin em origins:associated): 106 em /authorize, sem pop
     assert.notEqual((await authorize(randomUUID(), { pm: 'qrcode' }, { Origin: origin })).status, 106);
 });
 
-test('registro de classe associada gravado antes de 15/10: /token da 106 (A8)', async () => {
+test('registro client:{id} de classe associada: /token da 106', async () => {
     const cid = randomUUID();
     await manager.AuthorizeClient(cid, 'local-associated');
     const rt = (await manager.GetAuthorizedClient(cid)).getRefreshToken();
@@ -255,7 +243,7 @@ test('nao local (pm=qrcode): a resposta nao traz "key"', async () => {
     assert.equal(r.json.key, undefined);
 });
 
-// --- D-0510-4: clientes autorizados (reuniao 05/10 com o Joel) -------------------
+// --- clientes autorizados ------------------------------------------------------------
 test('autorizado entra em clients:authorized; recusado so em clients:blocked', async () => {
     viewerAnswer = true;
     const ok = randomUUID();
@@ -288,7 +276,7 @@ test('bloquear um autorizado: sai de clients:authorized, /token recusa (102) e o
     assert.equal(await popUpsDuring(async () => { expectError(await authorize(cid), 101); }), 0);
 });
 
-test('cliente anterior ao conjunto (so client:{id}): reuso da 101 e a migracao do boot o inclui', async () => {
+test('cliente so com client:{id}, fora de clients:authorized: reuso da 101 e o boot o inclui', async () => {
     viewerAnswer = true;
     const legacy = randomUUID();
     const legacyBlocked = randomUUID();
@@ -297,7 +285,7 @@ test('cliente anterior ao conjunto (so client:{id}): reuso da 101 e a migracao d
     await fakeRedis.sadd('clients:blocked', legacyBlocked);
 
     assert.equal(await popUpsDuring(async () => { expectError(await authorize(legacy), 101); }), 0);
-    // antes da migracao, /token nao o reconhece como autorizado
+    // sem a inclusao do boot, /token nao o reconhece como autorizado
     expectError(await get('/token', { clientid: legacy, 'refresh-token': 'rt-antigo' }), 102);
 
     const added = await manager.backfillAuthorizedClients();
@@ -310,7 +298,7 @@ test('cliente anterior ao conjunto (so client:{id}): reuso da 101 e a migracao d
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
 });
 
-// --- P4 (Luis, 10/10): escritas de cliente pelas funcoes do Redis --------------------
+// --- escritas de cliente pelas funcoes do Redis --------------------------------------
 test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das funcoes tv30_cliente_*', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
@@ -351,7 +339,7 @@ test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora 
     assert.ok(!members('clients:authorized').includes(cid));
 });
 
-// --- D-0510-6: Redis fora do ar ----------------------------------------------------
+// --- Redis fora do ar -----------------------------------------------------------------
 test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-up', async () => {
     viewerAnswer = true;
     fake.setDown(true);
@@ -366,13 +354,9 @@ test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-u
     }
 });
 
-// --- 12/10 (spec-1210-seguranca): parametro vazio e challenge de uso unico -----
-// Item 1: parametro vazio ou so com espacos vale como AUSENTE, e o parametro
-// exigido e ausente da 105 (Tabela C.3, p. 215; Tabela C.4, p. 217). Antes,
-// /tv3/token com refresh-token= vazio emitia credencial (o primeiro caso e o
-// refresh-vazio.js da frente "pareamento"). Item 2: depois do sucesso do
-// /tv3/token por challenge-response, o material do pareamento sai do cliente
-// e a repeticao da 102 (Tabela C.4).
+// --- parametro vazio e challenge de uso unico ------------------------------------------
+// Vazio ou so espacos vale como ausente (105, Tabelas C.3 e C.4); depois do sucesso por challenge-response,
+// a repeticao da 102 (Tabela C.4).
 const sha = (b: Buffer) => createHash('sha256').update(b).digest();
 const aes = (enc: boolean, k: Buffer, d: Buffer) => {
     const c = enc ? createCipheriv('aes-128-ecb', k, null) : createDecipheriv('aes-128-ecb', k, null);
@@ -412,7 +396,7 @@ async function pairNonLocal(pm: 'qrcode' | 'kex'): Promise<NonLocal> {
 const tokenByChallenge = (p: NonLocal, headers: Record<string, string> = {}) =>
     getRaw('/token', `clientid=${p.cid}&challenge-response=${p.cr}`, headers);
 
-test('refresh-token vazio ou so espacos (12/10, refresh-vazio.js): 105 sem credencial; o refresh token legitimo segue valendo', async () => {
+test('refresh-token vazio ou so espacos: 105 sem credencial; o refresh token legitimo segue valendo', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
     const first = await authorize(cid);
@@ -422,14 +406,12 @@ test('refresh-token vazio ou so espacos (12/10, refresh-vazio.js): 105 sem crede
         expectError(r, 105);
         assert.equal(r.json.accessToken, undefined, `refresh-token=${v}`);
     }
-    // antes: o vazio emitia credencial e rotacionava o refresh token, e o
-    // legitimo passava a dar 101
     const tok = await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken });
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
     assert.equal(typeof tok.json.accessToken, 'string');
 });
 
-test('nao local com refresh-token ou challenge-response vazios (12/10): 105, sem pular o pareamento nem a exigencia de HTTPS', async () => {
+test('nao local com refresh-token ou challenge-response vazios: 105, sem pular o pareamento nem a exigencia de HTTPS', async () => {
     const p = await pairNonLocal('qrcode');
     for (const q of ['refresh-token=', 'refresh-token=%20', 'challenge-response=', 'challenge-response=%20', 'refresh-token=&challenge-response=']) {
         for (const h of [{}, HTTPS]) {
@@ -445,14 +427,14 @@ test('nao local com refresh-token ou challenge-response vazios (12/10): 105, sem
     assert.equal(typeof JSON.parse(aes(false, p.secret, ok.raw).toString('utf8')).accessToken, 'string');
 });
 
-test('clientid vazio ou so espacos em /tv3/token (12/10): 105', async () => {
+test('clientid vazio ou so espacos em /tv3/token: 105', async () => {
     for (const v of ['', '%20']) {
         expectError(await getRaw('/token', `clientid=${v}&refresh-token=x`), 105);
         expectError(await getRaw('/token', `clientid=${v}&challenge-response=x`), 105);
     }
 });
 
-test('/tv3/authorize com clientid, display-name ou key vazios (12/10): 105, sem pop-up e sem autorizar', async () => {
+test('/tv3/authorize com clientid, display-name ou key vazios: 105, sem pop-up e sem autorizar', async () => {
     viewerAnswer = true;
     const cases = [
         'clientid=&display-name=x',
@@ -467,12 +449,11 @@ test('/tv3/authorize com clientid, display-name ou key vazios (12/10): 105, sem 
         assert.equal(await popUpsDuring(async () => { r = await getRaw('/authorize', q); }), 0, q);
         expectError(r!, 105);
     }
-    // antes: clientid= vazio autorizava o clientid "" (com pop-up)
     assert.ok(!members('clients:authorized').includes(''));
     assert.ok(!members('clients:authorized').includes(' '));
 });
 
-test('/tv3/authorize com pm vazio (12/10): vale como ausente, e o cliente se classifica local', async () => {
+test('/tv3/authorize com pm vazio: vale como ausente, e o cliente se classifica local', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
     const r = await getRaw('/authorize', `clientid=${cid}&display-name=x&pm=`);
@@ -482,7 +463,7 @@ test('/tv3/authorize com pm vazio (12/10): vale como ausente, e o cliente se cla
 });
 
 for (const pm of ['qrcode', 'kex'] as const) {
-    test(`pm=${pm}: challenge-response repetido depois do sucesso (12/10): 102 sem credencial nova; o refresh token emitido segue valendo`, async () => {
+    test(`pm=${pm}: challenge-response repetido depois do sucesso: 102 sem credencial nova; o refresh token emitido segue valendo`, async () => {
         const p = await pairNonLocal(pm);
         const first = await tokenByChallenge(p);
         assert.equal(first.status, 200);
@@ -495,8 +476,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
         assert.equal(client.getChallenge(), undefined);
         if (pm === 'kex') assert.throws(() => client.getECDHPublicKey(), /no ECDH key pair/);
 
-        // a repeticao, por HTTP e por HTTPS (antes: credencial nova e, por
-        // HTTPS, em claro)
+        // a repeticao, por HTTP e por HTTPS
         for (const h of [{}, HTTPS]) {
             const again = await tokenByChallenge(p, h);
             expectError(again, 102);
@@ -509,15 +489,14 @@ for (const pm of ['qrcode', 'kex'] as const) {
     });
 }
 
-test('cliente local com challenge-response (12/10): 102, nao ha challenge pendente', async () => {
+test('cliente local com challenge-response: 102, nao ha challenge pendente', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
     assert.equal((await authorize(cid)).status, 200);
-    // antes: 404 {error:200} (decifrar sem chave); com o vazio, credencial
     expectError(await getRaw('/token', `clientid=${cid}&challenge-response=${randomBytes(32).toString('base64url')}`), 102);
 });
 
-test('dois /tv3/token simultaneos com o mesmo challenge-response (12/10): so um emite credencial', async () => {
+test('dois /tv3/token simultaneos com o mesmo challenge-response: so um emite credencial', async () => {
     const p = await pairNonLocal('qrcode');
     // escrita lenta no armazenamento: o segundo /tv3/token e conferido
     // enquanto o primeiro ainda emite a credencial
@@ -532,7 +511,7 @@ test('dois /tv3/token simultaneos com o mesmo challenge-response (12/10): so um 
     }
 });
 
-test('emissao falha depois do desafio conferido (12/10): o material volta, o mesmo challenge-response conclui e depois nao vale mais', async () => {
+test('emissao falha depois do desafio conferido: o material volta, o mesmo challenge-response conclui e depois nao vale mais', async () => {
     const p = await pairNonLocal('qrcode');
     fake.recusar('tv30_cliente_grava', 'TV30ESQUEMA tv30_cliente_grava: recusa de teste');
     const errorOrig = console.error;
@@ -547,13 +526,7 @@ test('emissao falha depois do desafio conferido (12/10): o material volta, o mes
     expectError(await tokenByChallenge(p), 102);
 });
 
-// --- 12/10 (spec-1210-seguranca2, item 3): comparacao de segredo ---------------
-// validateRefreshToken comparava com "==" (sem tempo constante) e
-// validateChallenge comparava o hash convertido por .toString() UTF-8: byte que
-// nao forma UTF-8 valido vira U+FFFD, e um challenge-response com bytes
-// diferentes nessas posicoes passava. Agora: crypto.timingSafeEqual sobre os
-// bytes, tamanho diferente = falha. O formato que o cliente manda nao muda
-// (Tabela C.4): os casos de pareamento acima seguem passando.
+// --- comparacao de segredo: bytes, crypto.timingSafeEqual, tamanho diferente = falha --------
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ClientClass = require('../src/modules/auth-manager/client').default as typeof import('../src/modules/auth-manager/client').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -568,7 +541,7 @@ function timingSafeCalls(fn: () => void): number {
     return calls;
 }
 
-test('Client.validateRefreshToken (12/10): igual vale, diferente ou de outro tamanho nao (sem lancar), lista nao; tempo constante', () => {
+test('Client.validateRefreshToken: igual vale, diferente ou de outro tamanho nao (sem lancar), lista nao; tempo constante', () => {
     const c = new ClientClass(randomUUID());
     const rt = c.getRefreshToken();
     const other = rt.slice(0, -1) + (rt.endsWith('A') ? 'B' : 'A');   // mesmo tamanho
@@ -583,7 +556,7 @@ test('Client.validateRefreshToken (12/10): igual vale, diferente ou de outro tam
     assert.equal(c.validateRefreshToken(undefined as unknown as string), false);
 });
 
-test('Client.validateChallenge (12/10): compara bytes; tamanho diferente ou sem challenge e falha; tempo constante', () => {
+test('Client.validateChallenge: compara bytes; tamanho diferente ou sem challenge e falha; tempo constante', () => {
     const c = new ClientClass(randomUUID(), 'non-local');
     const h = sha(randomBytes(16));
     assert.equal(c.validateChallenge(Buffer.from(h)), false, 'sem challenge guardado');
@@ -598,15 +571,14 @@ test('Client.validateChallenge (12/10): compara bytes; tamanho diferente ou sem 
     assert.equal(c.validateChallenge(Buffer.alloc(0)), false);
 });
 
-test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8 (12/10): 102; a resposta certa conclui depois', async () => {
+test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8: 102; a resposta certa conclui depois', async () => {
     // procura um desafio cujo hash tenha um byte de 0xF8 a 0xFF (nunca e
     // UTF-8 valido: vira U+FFFD sozinho); trocar esse byte por outro da mesma
     // faixa nao muda o .toString() (P = 1 - (248/256)^32 ~ 0,64 por desafio)
     let p: NonLocal | undefined;
     let i = -1;
     for (let tries = 0; tries < 40 && i < 0; tries++) {
-        // cada tentativa deixa o QR code da anterior na tela (103 desde a
-        // noite de 12/10): a camada fica livre para a proxima
+        // cada tentativa deixa o QR code da anterior na tela (103): libera a camada para a proxima
         _camadaParaTestes.limpar();
         p = await pairNonLocal('qrcode');
         i = sha(p.plain).findIndex(b => b >= 0xf8);
@@ -616,7 +588,7 @@ test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8 (12/10
     const forged = Buffer.from(h);
     forged[i] = h[i] === 0xff ? 0xfe : 0xff;
     assert.notDeepEqual(forged, h);
-    assert.equal(forged.toString(), h.toString(), 'precondicao: o mesmo texto UTF-8 (a comparacao de antes aceitava)');
+    assert.equal(forged.toString(), h.toString(), 'precondicao: o mesmo texto UTF-8 (uma comparacao por .toString() aceitaria)');
     const forgedCr = aes(true, p!.secret, forged).toString('base64url');
     const r = await getRaw('/token', `clientid=${p!.cid}&challenge-response=${forgedCr}`);
     expectError(r, 102);
@@ -627,7 +599,7 @@ test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8 (12/10
     assert.equal(typeof JSON.parse(aes(false, p!.secret, ok.raw).toString('utf8')).accessToken, 'string');
 });
 
-test('challenge-response que decifra para outro tamanho (12/10): 102, e nao 404 {error:200} de excecao', async () => {
+test('challenge-response que decifra para outro tamanho: 102, e nao 404 {error:200} de excecao', async () => {
     const p = await pairNonLocal('kex');
     const h = sha(p.plain);
     for (const wrong of [h.subarray(0, 16), Buffer.concat([h, Buffer.from('x')]), Buffer.alloc(0)]) {
@@ -637,7 +609,7 @@ test('challenge-response que decifra para outro tamanho (12/10): 102, e nao 404 
     assert.equal((await tokenByChallenge(p)).status, 200);
 });
 
-test('refresh-token de outro tamanho ou repetido (12/10): 101, e o legitimo segue valendo', async () => {
+test('refresh-token de outro tamanho ou repetido: 101, e o legitimo segue valendo', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
     const first = await authorize(cid);
@@ -650,13 +622,8 @@ test('refresh-token de outro tamanho ou repetido (12/10): 101, e o legitimo segu
     assert.equal(ok.status, 200, JSON.stringify(ok.json));
 });
 
-// --- 12/10 (spec-1210-defeitos3, item 3): challenge-response que nao decifra ----
-// Tamanho que nao e multiplo do bloco do AES ou padding PKCS#7 invalido: o
-// decipher lancava, e a resposta era 404 {error:200} (errorHandler); o mesmo
-// com o parametro repetido (lista). Tabela C.4 (p. 217; p. 235 do PDF): "102:
-// If the challenge-response value is not validated by the TV 3.0 receiver as
-// correct". Agora: 102, com a mesma resposta do hash errado (o erro de padding
-// nao se distingue), sem credencial, e a tentativa segue aberta.
+// --- challenge-response que nao decifra (bloco ou padding PKCS#7 invalido, lista) ---------
+// 102 com a mesma resposta do hash errado (Tabela C.4), sem credencial, e a tentativa segue aberta.
 const aesRaw = (k: Buffer, d: Buffer) => {
     const c = createCipheriv('aes-128-ecb', k, null);
     c.setAutoPadding(false);
@@ -664,7 +631,7 @@ const aesRaw = (k: Buffer, d: Buffer) => {
 };
 
 for (const pm of ['qrcode', 'kex'] as const) {
-    test(`pm=${pm}: challenge-response que nao decifra ou repetido (12/10): 102 igual ao do hash errado, sem credencial; a solucao certa conclui depois`, async () => {
+    test(`pm=${pm}: challenge-response que nao decifra ou repetido: 102 igual ao do hash errado, sem credencial; a solucao certa conclui depois`, async () => {
         const p = await pairNonLocal(pm);
         const b64 = (b: Buffer) => b.toString('base64url');
         const lastByte = (v: number) => { const b = randomBytes(32); b[31] = v; return b; };
@@ -678,7 +645,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
             ['so caracteres fora do base64 (decodifica vazio)', '!!!!'],
             ['repetido (lista)', `${p.cr}&challenge-response=${p.cr}`],
         ];
-        // referencia: hash errado bem cifrado (o 102 que ja existia)
+        // referencia: hash errado bem cifrado
         const wrongHash = await getRaw('/token', `clientid=${p.cid}&challenge-response=${b64(aes(true, p.secret, sha(randomBytes(16))))}`);
         expectError(wrongHash, 102);
         for (const [what, cr] of malformed) {

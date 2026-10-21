@@ -1,6 +1,6 @@
 import core from "../../core";
 import mqttClient, { TOPICS } from "../../mqtt-client";
-import { ReqBody } from "../../api/multi-device/service";
+import { ReqBody } from "../../api/remote-device/service";
 import {
   Action,
   CapabilitiesMetadata,
@@ -91,8 +91,7 @@ export default class RemoteDevice {
 
     ws.on("close", () => {
       console.log(`${this.handle} disconnected.`);
-      // sem API para responder: a falha do armazenamento vai para o log
-      // (D-0510-6) em vez de virar rejeicao solta
+      // sem API para responder, a falha do armazenamento vai para o log em vez de virar rejeicao solta
       removeRemoteDevice(this.handle).catch((err: Error) =>
         console.error(`[remote-devices] falha removendo ${this.handle} apos desconexao: ${err?.message}`));
     });
@@ -109,12 +108,10 @@ export default class RemoteDevice {
       return;
     }
 
-    // Transition Message
     if (msg.includes("transition")) {
       const data: TransitionMetadata = JSON.parse(msg);
       this.publishTransitionMetadata(data);
     }
-    // Capabilities Message
     else if (msg.includes("capabilities")) {
       this.onCapabilitiesMessage(msg);
     } else {
@@ -128,7 +125,6 @@ export default class RemoteDevice {
       console.log(`Sendind message to client ${this.handle}\n ${JSON.stringify(data, null, 4)}\n\n`)
       this.ws.send(JSON.stringify(data));
     } else {
-      // TODO: store message for later
     }
   }
 
@@ -146,14 +142,13 @@ export default class RemoteDevice {
       if (capability.name === "state") {
         newCapability.state = capability.value;
       } else if (capability.name === "location") {
-        // Tabela A.45 (C3, Joel 15/10); "locator" nao e mais lido
+        // Tabela A.45
         newCapability.location = capability.value;
       } else if (capability.name === "preparationTime") {
         newCapability.preparationTime = capability.value;
       }
     }
 
-    // Somente um capability por effectType
     this.capabilities = this.capabilities.filter(
       (c) => c.effectType !== newCapability.effectType
     );
@@ -238,10 +233,8 @@ export default class RemoteDevice {
 
     const result: Record<string, string> = {};
     if (parts[0].includes("Event")) {
-      // It's the node eventType
       this.parseEvent(parts, m, result);
     } else {
-      // must be an interface id
       this.parseInterface(parts, m, result);
     }
 
@@ -275,7 +268,6 @@ export default class RemoteDevice {
     result["eventType"] = part;
 
     if (part == EventType.selection) {
-      // parses the key
       this.parseKey(parts, m, result);
     } else {
       this.parseAction(parts, m, result);
@@ -316,8 +308,7 @@ export default class RemoteDevice {
     return this.supportedTypes;
   }
 
-  // A7 (Joel, 15/10): wss:// nas respostas das Tabelas C.76 e C.80 quando o
-  // ponto de entrada tem TLS (entry-point.ts); ate 15/10, sempre ws://
+  // wss:// nas respostas das Tabelas C.76 e C.80 quando o ponto de entrada tem TLS
   public getUrl(): string {
     if (!this.wss) return "";
     return `${wsTls() ? "wss" : "ws"}://${core.server.url}:${this.wss.options.port}`;
@@ -361,7 +352,6 @@ export default class RemoteDevice {
     mqttClient.addTopicHandler(`${this.topic_prefix}/preparationEvent/actionNotification`, this.onMqttMessage.bind(this));
     mqttClient.addTopicHandler(`${this.topic_prefix}/presentationEvent/actionNotification`, this.onMqttMessage.bind(this));
 
-    // mqttClient.addTopicHandler(`${this.topic_prefix}/+/+/actionNotification`, this.onMqttMessage);
     this.subscribed = true;
   }
 
@@ -373,7 +363,6 @@ export default class RemoteDevice {
     mqttClient.removeTopicHandler(`${this.topic_prefix}/preparationEvent/actionNotification`, this.onMqttMessage.bind(this));
     mqttClient.removeTopicHandler(`${this.topic_prefix}/presentationEvent/actionNotification`, this.onMqttMessage.bind(this));
 
-    // mqttClient.removeTopicHandler(`${this.topic_prefix}/+/+/actionNotification`, this.onMqttMessage);
     this.subscribed = false;
     this.node = undefined;
     this.topic_prefix = ''
@@ -397,7 +386,6 @@ export default class RemoteDevice {
   protected setPropertyValue(m: string, t?: string): void {
     if (!t) return;
 
-    // :ifaceId/attributionEvent/value
     let ifaceId: string = t.replace(`${this.topic_prefix as string}/`, "");
     ifaceId = ifaceId.replace("/attributionEvent/value", "");
 
@@ -425,14 +413,8 @@ export default class RemoteDevice {
     lwss.on("connection", (ws) => this.onLocalClientConnection(ws));
   }
 
-  // Desativacao (DELETE /tv3/remote-device/device/{handle}, versao 100.0; a
-  // "C.6.15.7" de api/multi-device/index.ts e numeracao da proposta do Forum,
-  // o PDF da norma vai so ate a C.6.15.5): fecha o ponto de entrada local
-  // inteiro (inclusive o http.Server, que antes ficava escutando) e esquece a
-  // URL, para que uma nova ativacao abra outro em vez de devolver o endereco
-  // morto.
-  // Sem cliente local, as mensagens do dispositivo voltam a ser tratadas
-  // aqui em vez de repassadas.
+  // DELETE /device/{handle} (proposta do testbed, so na 100.0): esquece a URL para uma nova ativacao abrir
+  // outro ponto de entrada em vez de devolver o endereco morto; sem cliente local, nada mais e repassado.
   public removeLocalEntryPoint(): void {
     if (this.lws) {
       this.lws.close();
@@ -473,9 +455,6 @@ export default class RemoteDevice {
     }
   }
 
-  // Fecha os dois pontos de entrada com os seus http.Server: antes so o
-  // WebSocketServer era fechado, e a porta sorteada (450xx no compose)
-  // continuava escutando depois do descadastro.
   public terminate(): void {
     if (this.ws) {
       this.ws.close();

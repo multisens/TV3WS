@@ -1,7 +1,5 @@
-// Duble do src/mqtt-client.ts para os testes que carregam o core real (e o
-// app.ts inteiro): mesma interface (default + TOPICS + client), sem broker.
-// deliver(topico, mensagem) chama os tratadores registrados, como a chegada
-// de uma mensagem do broker.
+// Duble do src/mqtt-client.ts (default + TOPICS + client), sem broker. deliver(topico, mensagem) chama
+// os tratadores registrados, como a chegada de uma mensagem.
 type Handler = (m: string, t?: string) => void | Promise<void>;
 
 export const TOPICS = {

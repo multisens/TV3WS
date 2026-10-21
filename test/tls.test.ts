@@ -1,5 +1,4 @@
-// Material TLS do receptor (A7, Joel 15/10): o certificado do .tv30/tls
-// (TV30_TLS_DIR) vale para o HTTPS, o serverCert do pareamento e os wss://.
+// Material TLS do receptor: TV30_TLS_DIR, senao HTTPS_KEY/HTTPS_CERT.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';

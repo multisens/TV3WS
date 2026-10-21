@@ -1,8 +1,5 @@
-// C.6.16.3 (controle de renderizador de efeito sensorial) e capacidade de
-// posicao do aparelho. C3 (Joel, 15/10): no comando valem as propriedades da
-// Tabela A.30 e os atributos de posicao da A.3.19; nome fora dos dois
-// conjuntos da 101. A capacidade de posicao do aparelho se chama "location"
-// (Tabela A.45 da versao da norma do projeto), e nao "locator".
+// C.6.16.3: no comando valem as propriedades da Tabela A.30 e a posicao da A.3.19; outro nome da 101.
+// A capacidade de posicao do aparelho e "location" (Tabela A.45).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';

@@ -1,11 +1,6 @@
-// Registro e remocao de remote-device (C.6.15.2, C.6.15.3) com redis-client,
-// core e mqtt-client trocados por dubles. D-0510-6 (reuniao 05/10 com o
-// Joel): o espelho no Redis deixou de ser promessa solta — com o Redis fora
-// do ar a API responde 404 {error:200}, nao abre porta e nao deixa registro
-// pela metade; a remocao que falha mantem o dispositivo.
-// Rodada de 10/10: o descadastro fecha tambem o http.Server dos pontos de
-// entrada (a porta deixa de escutar), e porta sorteada ocupada (EADDRINUSE)
-// nao derruba o processo — sorteia outra ou responde 404 {error:200}.
+// Registro e remocao de remote-device (C.6.15.2, C.6.15.3) com Redis, core e MQTT por dubles. Com o Redis
+// fora, 404 {error:200} sem porta aberta nem registro pela metade; o descadastro fecha as portas; porta
+// sorteada ocupada sorteia outra.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -16,7 +11,6 @@ import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
 
 // pontos de entrada em ws:// aqui, independente do certificado da maquina
-// (o wss:// da A7 tem teste proprio: test/tls.test.ts)
 process.env.TV3WS_WS_TLS = 'false';
 
 const fake = createFakeRedis();
@@ -45,7 +39,7 @@ stub('mqtt-client', {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const multiDeviceAPI = require('../src/api/multi-device').default;
+const remoteDeviceAPI = require('../src/api/remote-device').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const basic = require('../src/middleware/basic').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -101,7 +95,7 @@ before(async () => {
     const app = express();
     app.use(express.json());
     app.use('/tv3', basic);   // res.locals.apiVersion (rotas por handle so na 100.0)
-    app.use('/tv3/remote-device', multiDeviceAPI);
+    app.use('/tv3/remote-device', remoteDeviceAPI);
     app.use(errorHandler);
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3/remote-device`;
@@ -122,8 +116,8 @@ const expectError = (r: { status: number; json: any }, code: number) => {
     assert.equal(r.json?.error, code, JSON.stringify(r.json));
 };
 const BODY = { deviceClass: 'teste', supportedTypes: ['light'] };
-// versao decidida pela borda (D2): o fluxo por handle e a 100.0 (D1)
-const V21 = { 'X-TV30-API-Version': '100.0' };
+// versao negociada pela borda; o fluxo por handle so existe na 100.0
+const V100 = { 'X-TV30-API-Version': '100.0' };
 
 test('Redis fora do ar no registro: 404 {error:200}, sem porta aberta, sem registro nem publicacao', async () => {
     portRange(wsPort);
@@ -161,8 +155,6 @@ test('registro com Redis normal; remocao que falha mantem o dispositivo; depois 
     assert.equal(manager.getDeviceByHandle(handle), undefined);
     assert.equal(store.has(`remote-device:${handle}`), false);
     assert.deepEqual(published[published.length - 1], ['aop/devices/teste', '']);
-    // antes de 10/10 o terminate() fechava so o WebSocketServer e o
-    // http.Server externo seguia escutando
     assert.equal(await listening(wsPort), false, 'a porta do dispositivo removido nao fica escutando');
     expectError(await call('DELETE', `/${handle}`), 101);
 });
@@ -243,18 +235,18 @@ test('100.0: DELETE /device/{handle} fecha a porta local e a ativacao seguinte a
     const handle: string = r.json.handle;
 
     portRange(localPort);
-    const ep = await call('GET', `/device/${handle}`, undefined, V21);
+    const ep = await call('GET', `/device/${handle}`, undefined, V100);
     assert.equal(ep.status, 200, JSON.stringify(ep.json));
     assert.equal(portOfUrl(ep.json.url), localPort);
     assert.equal(await listening(localPort), true);
 
-    assert.equal((await call('DELETE', `/device/${handle}`, undefined, V21)).status, 204);
-    assert.equal(await listening(localPort), false, 'porta local fechada pela C.6.15.7');
+    assert.equal((await call('DELETE', `/device/${handle}`, undefined, V100)).status, 204);
+    assert.equal(await listening(localPort), false, 'porta local fechada pelo DELETE /device/{handle}');
     assert.equal(await listening(devPort), true, 'o dispositivo continua registrado');
 
     const nextPort = await freePort();
     portRange(nextPort);
-    const ep2 = await call('GET', `/device/${handle}`, undefined, V21);
+    const ep2 = await call('GET', `/device/${handle}`, undefined, V100);
     assert.equal(ep2.status, 200, JSON.stringify(ep2.json));
     assert.equal(portOfUrl(ep2.json.url), nextPort, 'nova ativacao nao devolve o endereco fechado');
     assert.equal(await listening(nextPort), true);
@@ -274,8 +266,8 @@ test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', asyn
     const p = await freePortPair();
     portRange(p, p + 2);   // sem trava, o segundo pedido abriria a outra porta
     const [a, b] = await Promise.all([
-        call('GET', `/device/${handle}`, undefined, V21),
-        call('GET', `/device/${handle}`, undefined, V21),
+        call('GET', `/device/${handle}`, undefined, V100),
+        call('GET', `/device/${handle}`, undefined, V100),
     ]);
     assert.equal(a.status, 200, JSON.stringify(a.json));
     assert.equal(b.status, 200, JSON.stringify(b.json));

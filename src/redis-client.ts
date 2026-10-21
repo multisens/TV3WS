@@ -2,21 +2,9 @@ import Redis, { RedisOptions } from 'ioredis';
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-// D-0510-6 (reuniao 05/10 com o Joel): falha de Redis nao pode ser
-// silenciosa nem travar a API. Com o padrao do ioredis (20 tentativas por
-// comando, sem limite de tempo) um comando esperava ~10 s com o Redis fora
-// do ar e indefinidamente com o Redis congelado (medido em 09/10). Agora:
-// - maxRetriesPerRequest 1: o comando enfileirado sem conexao falha apos
-//   uma nova tentativa de conexao sem sucesso (~0,2 a 1 s, medido);
-// - commandTimeout 1500 ms: limite por comando, inclusive com o Redis
-//   aceitando conexao e nao respondendo (docker pause); fica abaixo dos 2 s
-//   de espera padrao da borda, entao quem responde o 404 {error:200} e o
-//   proprio tv3ws (errorHandler, C.3.2);
-// - connectTimeout 2000 ms: tentativa de conexao a host que nao responde;
-// - fila offline LIGADA: comandos do boot e de uma reconexao curta esperam a
-//   conexao em vez de falhar na hora; o limite acima impede espera longa.
-//   (Com a fila desligada, todo comando antes do 'ready' falharia.)
-// O cliente continua tentando reconectar (retryStrategy) e volta sozinho.
+// Falha de Redis nao pode ser silenciosa nem travar a API: o padrao do ioredis espera sem limite com o
+// Redis congelado. commandTimeout fica abaixo dos 2 s da borda, para o 404 {error:200} sair do tv3ws
+// (C.3.2). A fila offline deixa os comandos do boot e de reconexao curta esperarem a conexao.
 export const FAIL_FAST_OPTIONS = {
     connectTimeout: 2000,
     commandTimeout: 1500,

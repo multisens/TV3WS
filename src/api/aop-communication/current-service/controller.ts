@@ -3,11 +3,6 @@ import core from '../../../core';
 import { returnError } from '../../../util';
 import { integerServiceId } from '../../../util/service-id';
 
-// As rotas de teste GET /authorize e GET /token que viviam aqui sobrepunham
-// (por ordem de montagem) a implementacao real de apis/access — desafio
-// AES-128, ECDH, refresh token. Removidas (M2 da vacina); este modulo fica
-// so com a consulta de servico corrente.
-
 type CurrentServiceResponse = {
 	serviceContextId: string;
 	serviceName?: string;
@@ -16,22 +11,9 @@ type CurrentServiceResponse = {
 	serviceId?: number;
 };
 
-// C.6.3.1 (Tabela C.8, p. 222; p. 240 do PDF). Servico em uso = o ultimo
-// valor de aop/currentService (core.app.sid), publicado pela plataforma na
-// selecao do servico e esvaziado quando ela o desfaz; vazio ou nunca recebido
-// -> erro 300 ("If the DTV function is not in use in the receiver"). E o
-// mesmo criterio da borda para o 300 da C.6.8 (session:current-service-id,
-// espelho do mesmo topico). O 302 (sem recepcao de sinal) nao e emitido: o
-// testbed nao tem estado de recepcao. O 107 e da borda (D-0510-1).
-//
-// "serviceId" e inteiro na Tabela C.8 (@serviceId do <Service> da SLT); antes
-// saia como texto ("-1", "undefined").
-// O testbed nao tem SLT, e o @serviceId so existiria se alguem publicasse
-// aop/services, que nenhum modulo publica hoje. Sem valor inteiro conhecido,
-// o campo e omitido (C.3.2.2), como no item de boundServices da C.6.8.3
-// respondido pela borda (infra/edgegateway/plugin/bindcontext.go). O
-// serviceContextId e o globalServiceId do servico corrente (A6, Joel 15/10;
-// ate entao, uma constante do core).
+// C.6.3.1 (Tabela C.8). Servico em uso = ultimo valor de aop/currentService; vazio ou nunca recebido -> 300,
+// o mesmo criterio da borda na C.6.8. O 302 nao e emitido: o testbed nao modela recepcao de sinal.
+// serviceId sem valor inteiro conhecido e omitido (C.3.2.2); nenhum modulo publica aop/services.
 function GETCurrentService(req: Request, res: Response): void {
 	if (!core.app.sid) {
 		returnError(res, 300);
@@ -50,9 +32,5 @@ function GETCurrentService(req: Request, res: Response): void {
 	}
 	res.status(200).json(body);
 }
-
-// (integerServiceId foi para ../../../util/service-id.ts em 10/10, P4: o
-// core.ts usa a mesma regra no hash session:current-service.)
-
 
 export default { GETCurrentService }

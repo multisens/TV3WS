@@ -1,18 +1,6 @@
-// Pop-up do QR code e do PIN do pareamento do cliente nao local (C.4.3.2,
-// C.4.3.3). Correcao de 12/10 (spec-1210-defeitos, item 1): o pop-up sai com
-// o prazo da trava de seguranca (PAIRING_POPUP_TIMEOUT_MS, 120 s; antes 1 s)
-// e fica na tela ate o /tv3/token que confere a solucao do desafio (C.6.1.3)
-// com sucesso; nessa hora o tv3ws publica {"close":true} no MESMO topico do
-// pop-up. /tv3/token que falha nao fecha. Router real de
-// client-identification com o core REAL (o que sai no MQTT e o que a camada
-// grafica recebe) e redis-client e mqtt-client trocados por dubles. O duble
-// do broker responde "true" ao pop-up sim/nao no lugar do espectador.
-//
-// Desde a noite de 12/10 (decisao do Luis; parte da G2), um /tv3/authorize
-// novo recebe 103 enquanto ha na tela um sim/nao esperando resposta, ou o QR
-// code ou o PIN de um pareamento (C.4.2.3; Tabela C.3). Os casos dessa regra
-// estao no fim; antes deles, os que supunham a substituicao do pop-up na
-// tela viraram casos de 103.
+// Pop-up do QR code e do PIN do pareamento nao local (C.4.3.2, C.4.3.3): sai com a trava de 120 s e fecha
+// ({"close":true} no mesmo topico) no /tv3/token que confere o desafio. Com um pop-up de autorizacao na tela,
+// /tv3/authorize novo recebe 103 (C.4.2.3; Tabela C.3). Router e core reais; Redis e MQTT por dubles.
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -162,14 +150,13 @@ test('pm=qrcode: o QR code sai com o prazo de 120 s, fica nos /token que falham 
     const p = await authorize('qrcode');
     const open = JSON.parse(p.opened);
     assert.equal(typeof open.value, 'string');
-    assert.equal(open.timeout, PAIRING_POPUP_TIMEOUT_MS, `prazo antigo era 1000 ms: ${p.opened}`);
+    assert.equal(open.timeout, PAIRING_POPUP_TIMEOUT_MS, p.opened);
     assert.equal(open.close, undefined);
 
     const from = published.length;
     // solucao errada: 102 (Tabela C.4), pareamento nao concluido
     expectError(await token(p.cid, challengeResponse(p, true)), 102);
-    // challenge-response ilegivel (chave errada, padding invalido): 102 desde
-    // a rodada spec-1210-defeitos3 (item 3; era 404 {error:200}, da excecao)
+    // challenge-response ilegivel (chave errada, padding invalido): 102
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
@@ -248,7 +235,7 @@ test('emissao da credencial falha depois do desafio conferido: sem fechamento (p
         console.error = errorOrig;
     }
     assert.deepEqual(on(QR, from), [], 'a credencial nao saiu: o pop-up fica');
-    // a tentativa segue aberta (PENDENTE (Joel) em service.ts): o sucesso fecha
+    // a tentativa segue aberta: o sucesso fecha
     assert.equal((await token(p.cid, challengeResponse(p))).status, 200);
     assert.deepEqual(on(QR, from), [CLOSE]);
 });
@@ -262,8 +249,7 @@ test('103 com o sim/nao de um pedido esperando resposta: outro cliente e o MESMO
     assert.equal(on(`${YESNO}/message`, from).length, 1, 'o sim/nao do primeiro na tela');
     expectError(await authorizeRaw(novoLocal()), 103);
     expectError(await authorizeRaw(novoNaoLocal()), 103);
-    // o mesmo clientid ao mesmo tempo (KNOWN-ISSUES.md, ate 12/10: o segundo
-    // abria outro pop-up, tomava a resposta e o primeiro acabava bloqueado)
+    // o mesmo clientid ao mesmo tempo tambem recebe 103
     expectError(await authorizeRaw({ clientid: cid, 'display-name': 'teste-camada' }), 103);
     assert.equal(on(`${YESNO}/message`, from).length, 1, 'um sim/nao so');
     responderSimNao('true');
@@ -271,7 +257,7 @@ test('103 com o sim/nao de um pedido esperando resposta: outro cliente e o MESMO
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(typeof r.json.refreshToken, 'string');
     // o 103 do segundo pedido com o mesmo clientid nao liberou a reserva do
-    // primeiro nem estragou a autorizacao dele; a camada agora esta livre
+    // primeiro nem estragou a autorizacao dele; a camada esta livre
     assert.equal(_camadaParaTestes.ocupacao(), undefined);
     respostaSimNao = 'true';
     assert.equal((await authorizeRaw(novoLocal())).status, 200);
@@ -308,8 +294,7 @@ test('a trava de 120 s libera a camada; o sucesso tardio de A nao fecha o QR cod
     agora += PAIRING_POPUP_TIMEOUT_MS;   // a camada grafica fechou o QR code de A
     const b = await authorize('qrcode');
     const from = published.length;
-    // o desafio de A continua valendo depois da trava (prazo do desafio: G2,
-    // com o Joel), mas o QR code na tela e o de B
+    // o desafio de A continua valendo depois da trava, mas o QR code na tela e o de B
     assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
     assert.deepEqual(on(QR, from), [], 'o fim de A depois da trava nao fecha o pop-up de B');
     assert.equal((await token(b.cid, challengeResponse(b))).status, 200);
