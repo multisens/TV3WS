@@ -201,7 +201,7 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
 });
 
 // --- arquivo de perfil (C.6.14.6) -----------------------------------------------------
-// fora de USER_THUMBS, inexistente ou que nao e arquivo: 305 (Tabela C.73)
+// fora de USER_THUMBS, inexistente ou que nao e arquivo: 305 (Tabela C.75)
 test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o conteudo; dentro, 200', async () => {
     const fsm = await import('fs');
     const osm = await import('os');
@@ -233,7 +233,7 @@ test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o 
     }
 });
 
-// --- C.6.14.6 sem consentimento: 405; caminho de ninguem: 305 (Tabela C.73) ------------
+// --- C.6.14.6 sem consentimento: 405; caminho de ninguem: 305 (Tabela C.75) ------------
 test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com consentimento, 200; de ninguem, 305', async () => {
     const fsm = await import('fs');
     const osm = await import('os');
@@ -284,7 +284,7 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
 });
 
 // --- avatar = nome de arquivo das miniaturas ------------------------------------------
-// Tabela 7: "avatar" e "file path"; a plataforma grava <id>.svg em USER_THUMBS. Tabela C.73: Content-Type
+// Tabela 7: "avatar" e "file path"; a plataforma grava <id>.svg em USER_THUMBS. Tabela C.75: Content-Type
 // pela extensao do arquivo.
 const AVATAR_CARGA = 'c3167a18-5dc5-4a6e-9b1d-3f2a7c5e8d10.svg';
 
@@ -334,7 +334,7 @@ test('C.6.14.2: o avatar sai como esta no perfil (o nome do arquivo), no JSON e 
     assert.equal(r.text, AVATAR_CARGA);
 });
 
-// --- aviso ao usuario na C.6.14.5 (Tabela C.72, "Restrictions") -----------------------
+// --- aviso ao usuario na C.6.14.5 (Tabela C.74, "Restrictions") -----------------------
 // Gravacao com mudanca publica, nao retido, em aop/display/layers/popup/info; sem mudanca ou com falha, nada.
 const INFO = 'aop/display/layers/popup/info';
 const infos = () => published.filter(([t]) => t === INFO);

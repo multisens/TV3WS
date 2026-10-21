@@ -181,7 +181,7 @@ async function getUserAttributes(uuid: string, scidParam: string | undefined, qu
 }
 
 // C.6.14.6: o arquivo e o avatar de um perfil que deu acesso ao servico ('granted')? So de perfis sem
-// acesso: 'no-consent' (405, Tabela C.73); de nenhum perfil: 'no-owner' (305). O servico conferido e o
+// acesso: 'no-consent' (405, Tabela C.75); de nenhum perfil: 'no-owner' (305). O servico conferido e o
 // corrente (session:current-service-id), nao o <service-context-id> da URL.
 export type AvatarAccess = 'granted' | 'no-consent' | 'no-owner';
 
@@ -263,7 +263,7 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
 }
 
 
-// Tabela C.72, "Restrictions": "it is necessary to notify the user that the application wants to
+// Tabela C.74, "Restrictions": "it is necessary to notify the user that the application wants to
 // change/add the attribute". Aviso informativo depois de gravar, sem confirmacao; nao retido, para um
 // aviso velho nao voltar quando a pagina da TV reconecta.
 export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
@@ -298,7 +298,7 @@ async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
 type FileData = { size: number; mime: string; name: string; file: string };
 
 // Resolvido dentro de USER_THUMBS seja qual for o valor do campo avatar. undefined = recusado, inexistente
-// ou nao arquivo (305, Tabela C.73).
+// ou nao arquivo (305, Tabela C.75).
 function getFile(fpath: string): FileData | undefined {
     const entry = resolveInsideDir(process.env.USER_THUMBS, fpath);
     if (entry === undefined || !entry.stat.isFile()) return undefined;
@@ -314,7 +314,7 @@ function getFile(fpath: string): FileData | undefined {
     };
 }
 
-// Tabela C.73: Content-Type pelo MIME derivado da extensao. Estas sao as do avatar; o resto sai
+// Tabela C.75: Content-Type pelo MIME derivado da extensao. Estas sao as do avatar; o resto sai
 // application/octet-stream, como na C.6.4.7 (Tabela C.17).
 const MIME_BY_EXT: Record<string, string> = {
     '.svg': 'image/svg+xml',

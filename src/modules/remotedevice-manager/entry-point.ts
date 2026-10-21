@@ -6,7 +6,7 @@ import { tlsMaterial, wsTls } from "../../tls";
 
 // Ponto de entrada WebSocket: o do registro (C.6.15.2, "socket server on a dynamically assigned port") e o
 // local, da listagem 2.0 (C.6.15.5) ou da rota por handle (proposta do testbed, so na 100.0). Porta ocupada
-// sorteia outra; esgotadas as tentativas, 404 {error:200} (Tabela C.74). A porta so e entregue escutando.
+// sorteia outra; esgotadas as tentativas, 404 {error:200} (Tabela C.76). A porta so e entregue escutando.
 export const LISTEN_ATTEMPTS = 10;
 
 export function generateDynamicallyPort(): number {

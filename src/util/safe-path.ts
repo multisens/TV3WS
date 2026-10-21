@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-// Caminho do cliente resolvido dentro de um diretorio-base (C.6.4.7, Tabela C.17; C.6.14.6, Tabela C.73).
+// Caminho do cliente resolvido dentro de um diretorio-base (C.6.4.7, Tabela C.17; C.6.14.6, Tabela C.75).
 // A barra inicial e opcional e o caminho e sempre a partir da base (Tabela C.17). ".." que sai da base,
 // barra invertida (separador no Windows) e NUL sao recusados; a query ja chega decodificada, e nada se
 // decodifica de novo. Link simbolico vale pelo destino real, que tambem tem de estar na base; base vazia

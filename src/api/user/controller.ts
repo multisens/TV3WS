@@ -53,7 +53,7 @@ function GETUserFile(req: Request, res: Response): void {
 	const path = req.query.path as string;
 	service.checkConsent(path)
 	.then((access) => {
-		// perfil dono do avatar sem consentimento: 405 (Tabela C.73)
+		// perfil dono do avatar sem consentimento: 405 (Tabela C.75)
 		if (access === 'no-consent') {
 			returnError(res, 405, path);
 		}
@@ -61,7 +61,7 @@ function GETUserFile(req: Request, res: Response): void {
 			returnError(res, 305, path);
 		}
 		else {
-			// caminho fora de USER_THUMBS ou inexistente: 305 (Tabela C.73)
+			// caminho fora de USER_THUMBS ou inexistente: 305 (Tabela C.75)
 			const file_data = service.getFile(path);
 			if (file_data === undefined) {
 				returnError(res, 305, path);
