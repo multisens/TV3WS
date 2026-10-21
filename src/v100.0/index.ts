@@ -12,6 +12,7 @@ router.use((req: Request, res: Response, next: NextFunction) => {
 router.use(express.json());
 
 // Includes the routes for APIs
+router.use('/tv3/remote-device', remoteDevApi);
 
 // Responds error 100 with the path as sent by the client, without the
 // version prefix
