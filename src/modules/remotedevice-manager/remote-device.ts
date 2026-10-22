@@ -413,7 +413,7 @@ export default class RemoteDevice {
     lwss.on("connection", (ws) => this.onLocalClientConnection(ws));
   }
 
-  // DELETE /device/{handle} (proposta do testbed, so na 100.0): esquece a URL para uma nova ativacao abrir
+  // DELETE /device/{handle} (extensao do testbed, so na 100.0): esquece a URL para uma nova ativacao abrir
   // outro ponto de entrada em vez de devolver o endereco morto; sem cliente local, nada mais e repassado.
   public removeLocalEntryPoint(): void {
     if (this.lws) {

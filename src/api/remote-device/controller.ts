@@ -59,7 +59,7 @@ async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
   });
 }
 
-// Rotas por handle: proposta do testbed, fora da Tabela C.2, so na versao 100.0. A borda ja responde 100
+// Rotas por handle: extensao do testbed, fora da Tabela C.2, so na versao 100.0. A borda ja responde 100
 // nas outras versoes; esta conferencia e para quem chega sem passar por ela.
 function handleRoutesAreV100(req: Request, res: Response): boolean {
   if (res.locals.apiVersion !== '100.0') {

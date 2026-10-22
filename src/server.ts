@@ -20,7 +20,7 @@ import { backfillAuthorizedClients } from './modules/auth-manager/manager';
 whenRedisReady('limpeza do espelho de remote-devices', clearStoredRegistry);
 whenRedisReady('clients:authorized a partir de client:*', async () => {
     const added = await backfillAuthorizedClients();
-    if (added > 0) console.log(`[redis] ${added} cliente(s) antigo(s) incluido(s) em clients:authorized`);
+    if (added > 0) console.log(`[redis] ${added} cliente(s) registrado(s) incluido(s) em clients:authorized`);
 });
 connectRedis();
 
