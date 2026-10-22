@@ -53,6 +53,13 @@ class RegistryManager {
         return true;
     }
 
+    // Removes every registration, as removeRegistry does for each one
+    public clear(): void {
+        for (const handle of [...this.registryByHandle.keys()]) {
+            this.removeRegistry(handle);
+        }
+    }
+
     public size(): number {
         return this.registryByHandle.size;
     }
