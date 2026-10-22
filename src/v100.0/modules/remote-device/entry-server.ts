@@ -17,9 +17,14 @@ const ENTRY_PREFIX = `/${ENTRY_PATH}/`;
 const wss = new WebSocketServer({ noServer: true });
 const alive = new WeakSet<WebSocket>();
 
-// Port of the entry server; undefined while it is not listening
-let port: number | undefined;
-let server: Server | undefined;
+type EntryKind = 'device' | 'local';
+
+// Entry servers of the devices (C.6.15.2) and of the local clients
+// (C.6.15.5); the ports are undefined while the servers are not listening
+let devicePort: number | undefined;
+let deviceServer: Server | undefined;
+let localPort: number | undefined;
+let localServer: Server | undefined;
 let pingTimer: NodeJS.Timeout | undefined;
 
 function generateDynamicallyPort(): number {
@@ -47,17 +52,26 @@ async function listenOnFreePort(server: Server): Promise<number> {
     throw new Error(`no free port after ${LISTEN_ATTEMPTS} attempts`);
 }
 
-// Opens the single entry server, with TLS when wsTls() is on and there is
-// TLS material, on a free port
+// Opens the entry server of the devices, with TLS when wsTls() is on and
+// there is TLS material, and the entry server of the local clients, without
+// TLS (C.6.15.5, Table C.80: ws://), each on a free port
 export async function startEntryServer(): Promise<void> {
     const tls = wsTls() ? tlsMaterial() : undefined;
-    const entryServer = tls
+    const deviceServer = tls
         ? https.createServer({ key: tls.key, cert: tls.cert })
         : http.createServer();
-    entryServer.on('upgrade', onUpgrade);
-    port = await listenOnFreePort(entryServer);
-    server = entryServer;
-    console.log(`[v100.0 remote-device] entry server listening on port ${port}`);
+    deviceServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+        onUpgrade('device', req, socket, head);
+    });
+    devicePort = await listenOnFreePort(deviceServer);
+
+    const localServer = http.createServer();
+    localServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+        onUpgrade('local', req, socket, head);
+    });
+    localPort = await listenOnFreePort(localServer);
+
+    console.log(`[v100.0 remote-device] entry servers listening on ports ${devicePort} (devices) and ${localPort} (local clients)`);
 
     pingTimer = setInterval(() => {
         for (const ws of wss.clients) {
@@ -72,37 +86,54 @@ export async function startEntryServer(): Promise<void> {
     }, PING_INTERVAL_MS);
 }
 
-// Stops the ping timer, closes every connection and the server
+// Stops the ping timer, closes every connection and both servers
 export async function stopEntryServer(): Promise<void> {
     clearInterval(pingTimer);
     pingTimer = undefined;
     for (const ws of wss.clients) {
         ws.terminate();
     }
-    if (server) {
-        const closing = once(server, 'close');
-        server.close();
-        await closing;
+    await closeServer(deviceServer);
+    await closeServer(localServer);
+    deviceServer = undefined;
+    devicePort = undefined;
+    localServer = undefined;
+    localPort = undefined;
+}
+
+async function closeServer(server: Server | undefined): Promise<void> {
+    if (!server) {
+        return;
     }
-    server = undefined;
-    port = undefined;
+    const closing = once(server, 'close');
+    server.close();
+    await closing;
 }
 
 export function isEntryServerListening(): boolean {
-    return port !== undefined;
+    return devicePort !== undefined && localPort !== undefined;
 }
 
-// C.6.15.2: URL of the entry point identified by the token
+// C.6.15.2: URL of the entry point of the device identified by the token
 export function entryPointUrl(token: string): string {
-    if (port === undefined) {
+    if (devicePort === undefined) {
         throw new ApiError(200, 'entry server is not listening');
     }
-    return `${wsTls() ? 'wss' : 'ws'}://${core.server.url}:${port}${ENTRY_PREFIX}${token}`;
+    return `${wsTls() ? 'wss' : 'ws'}://${core.server.url}:${devicePort}${ENTRY_PREFIX}${token}`;
 }
 
-// Accepts the upgrade to the entry point of a registered device; any other
-// path or token is refused
-function onUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
+// C.6.15.5: URL of the local entry point identified by the token
+export function localEntryPointUrl(token: string): string {
+    if (localPort === undefined) {
+        throw new ApiError(200, 'entry server is not listening');
+    }
+    return `ws://${core.server.url}:${localPort}${ENTRY_PREFIX}${token}`;
+}
+
+// Accepts the upgrade to an entry point of the kind served by the server;
+// any other path or token is refused. The upgrade to a local entry point is
+// refused until the communication pair is implemented
+function onUpgrade(kind: EntryKind, req: IncomingMessage, socket: Socket, head: Buffer): void {
     const path = new URL(req.url ?? '', 'http://localhost').pathname;
     if (!path.startsWith(ENTRY_PREFIX)) {
         refuse(socket);
@@ -111,7 +142,11 @@ function onUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
 
     const token = path.slice(ENTRY_PREFIX.length);
     const entryPoint = registries.getEntryPoint(token);
-    if (!entryPoint || entryPoint.kind !== 'device') {
+    if (!entryPoint || entryPoint.kind !== kind) {
+        refuse(socket);
+        return;
+    }
+    if (entryPoint.kind === 'local') {
         refuse(socket);
         return;
     }
@@ -130,8 +165,8 @@ function refuse(socket: Socket): void {
 }
 
 function onDeviceConnection(registry: Registry, ws: WebSocket): void {
-    registry.connect(ws);
-    ws.on('close', () => registry.disconnect(ws));
+    registries.connect(registry, ws);
+    ws.on('close', () => registries.disconnect(registry, ws));
     ws.on('error', () => console.log(`Error on socket for device ${registry.handle}`));
     ws.on('message', () => console.log(`Message on socket for device ${registry.handle}`));
 }

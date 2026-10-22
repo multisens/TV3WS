@@ -1,6 +1,7 @@
 import { ApiError } from '../../../util';
-import { entryPointUrl, isEntryServerListening } from '../../modules/remote-device/entry-server';
+import { entryPointUrl, isEntryServerListening, localEntryPointUrl } from '../../modules/remote-device/entry-server';
 import { registries } from '../../modules/remote-device/manager';
+import { LocalClient } from '../../util/client';
 import { RegisterBody } from './schema';
 
 // Receiver limit on devices to register
@@ -11,6 +12,18 @@ export type RegisterResponse = {
     handle: string;
     url?: string;
 };
+
+// C.6.15.5, Table C.80
+export type DeviceInfo = {
+    deviceId: string;
+    supportedTypes: string[];
+    paired: boolean;
+    url: string;
+}
+export type DeviceListResponse = {
+    sequence: number;
+    devices?: DeviceInfo[];
+}
 
 // C.6.15.2: creates the registration and returns its handle and the URL of
 // its entry point
@@ -48,4 +61,33 @@ function removeDevice(handle: string): void {
     }
 }
 
-export default { registerDevice, updateDevice, removeDevice };
+// C.6.15.5: list connected devices registered in a class
+function listDevices(deviceClass: string, client: LocalClient): DeviceListResponse {
+    const sequence = registries.getSequence(deviceClass);
+    const connected = registries.getConnected(deviceClass);
+    
+    const devices: DeviceInfo[] = [];
+    for (const registry of connected) {
+        const token = registries.addLocalEntryPoint(registry, client.clientId, client.clientType);
+        devices.push({
+            deviceId: registry.deviceId,
+            supportedTypes: registry.getSupportedTypes(),
+            paired: registry.isPaired(),
+            url: localEntryPointUrl(token)
+        });
+    }
+
+    if (devices.length > 0) {
+        return {
+            sequence: sequence,
+            devices: devices
+        }
+    }
+    else {
+        return {
+            sequence: sequence
+        }
+    }
+}
+
+export default { registerDevice, updateDevice, removeDevice, listDevices };

@@ -25,6 +25,10 @@ export default class Registry {
         return this.deviceClass;
     }
 
+    public getSupportedTypes(): string[] {
+        return this.supportedTypes;
+    }
+
     public getLocalToken(clientId: string): string | undefined {
         return this.localTokens.get(clientId);
     }
@@ -57,21 +61,28 @@ export default class Registry {
         return this.ws !== undefined;
     }
 
-    // Takes the new connection and closes the previous one, if any
-    public connect(ws: WebSocket): void {
+    public isPaired(): boolean {
+        return false;
+    }
+
+    // Takes the new connection and closes the previous one, if any. Returns
+    // true if the registry was disconnected
+    public connect(ws: WebSocket): boolean {
         const previous = this.ws;
         this.ws = ws;
         previous?.close();
+        return previous === undefined;
     }
 
     // Called when the socket has closed; ignores a socket that is no longer
-    // the current one
-    public disconnect(ws: WebSocket): void {
+    // the current one. Returns true if the socket was the current one
+    public disconnect(ws: WebSocket): boolean {
         if (this.ws !== ws) {
-            return;
+            return false;
         }
         this.ws = undefined;
         this.disconnectedAt = Date.now();
+        return true;
     }
 
     // Closes the connection of the device, if any; disconnect() runs when

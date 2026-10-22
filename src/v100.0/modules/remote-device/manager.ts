@@ -1,7 +1,7 @@
 import { generateToken } from '../../util/token';
+import { ClientType } from '../../util/client';
 import Registry from './registry';
-
-export type ClientType = 'associated' | 'standAlone';
+import { WebSocket } from 'ws';
 
 // Entry point identified by a token in the URL path: the one of the device
 // (C.6.15.2) or the local one of a local client for the device (C.6.15.5)
@@ -9,11 +9,18 @@ export type EntryPoint =
     | { kind: 'device'; registry: Registry }
     | { kind: 'local'; registry: Registry; clientId: string; clientType: ClientType };
 
+export enum EventType {
+    AVAILABLE = 'available',
+    UNAVAILABLE = 'unavailable',
+    PAIR_FORMED = 'pairFormed',
+    PAIR_ENDED = 'pairEnded'
+};
 
 class RegistryManager {
     protected registryByHandle = new Map<string, Registry>();
     protected entryPointByToken = new Map<string, EntryPoint>();
     protected registryByClass = new Map<string, Set<Registry>>();
+    protected sequenceByClass = new Map<string, number>();
 
     public addRegistry(deviceClass: string, supportedTypes: string[]): Registry {
         const registry = new Registry(deviceClass, supportedTypes);
@@ -29,9 +36,16 @@ class RegistryManager {
         if (!registry) {
             return false;
         }
+        const classChanged = registry.getDeviceClass() !== deviceClass;
+        if (classChanged && registry.isConnected()) {
+            this.notify(EventType.UNAVAILABLE, registry);
+        }
         this.removeFromClass(registry);
         registry.update(deviceClass, supportedTypes);
         this.addToClass(registry);
+        if (classChanged && registry.isConnected()) {
+            this.notify(EventType.AVAILABLE, registry);
+        }
         return true;
     }
 
@@ -43,6 +57,9 @@ class RegistryManager {
         if (!registry) {
             return false;
         }
+        if (registry.isConnected()) {
+            this.notify(EventType.UNAVAILABLE, registry);
+        }
         this.registryByHandle.delete(handle);
         this.entryPointByToken.delete(registry.token);
         for (const token of registry.getLocalTokens()) {
@@ -51,6 +68,25 @@ class RegistryManager {
         this.removeFromClass(registry);
         registry.close();
         return true;
+    }
+
+    // Figure C.7: the device connects to its entry point; a connection that
+    // replaces another keeps the device available
+    public connect(registry: Registry, ws: WebSocket): void {
+        const becameAvailable = registry.connect(ws);
+        if (becameAvailable) {
+            this.notify(EventType.AVAILABLE, registry);
+        }
+    }
+
+    // Figure C.7: the connection of the device closed. Ignores a replaced
+    // connection and a removed registry, whose event removeRegistry emitted
+    public disconnect(registry: Registry, ws: WebSocket): void {
+        const wasCurrent = registry.disconnect(ws);
+        const isRegistered = this.registryByHandle.get(registry.handle) === registry;
+        if (wasCurrent && isRegistered) {
+            this.notify(EventType.UNAVAILABLE, registry);
+        }
     }
 
     // Removes every registration, as removeRegistry does for each one
@@ -74,6 +110,21 @@ class RegistryManager {
 
     public getEntryPoint(token: string): EntryPoint | undefined {
         return this.entryPointByToken.get(token);
+    }
+
+    // Table C.87: sequence number of the class; 0 for a class without events
+    public getSequence(deviceClass: string): number {
+        return this.sequenceByClass.get(deviceClass) ?? 0;
+    }
+
+    public getConnected(deviceClass: string): Set<Registry> {
+        const result = new Set<Registry>();
+        for (const registry of this.getRegistryByClass(deviceClass)) {
+            if (registry.isConnected()) {
+                result.add(registry);
+            }
+        }
+        return result;
     }
 
     // C.6.15.2, Table C.76: removes the registration disconnected for the
@@ -117,6 +168,16 @@ class RegistryManager {
                 this.entryPointByToken.delete(token);
             }
         }
+    }
+
+    // Table C.87: increments the sequence number of the class of the
+    // registry at each event of the class
+    // TODO: deliver the event to the listeners of the remote-device event
+    // class (C.6.15.6, C.6.2)
+    protected notify(eventType: EventType, registry: Registry): void {
+        const deviceClass = registry.getDeviceClass();
+        const sequence = this.getSequence(deviceClass) + 1;
+        this.sequenceByClass.set(deviceClass, sequence);
     }
 
     protected addToClass(registry: Registry): void {

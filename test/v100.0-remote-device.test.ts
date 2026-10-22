@@ -35,7 +35,7 @@ stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const app = require('../src/app').default;
-const { startEntryServer, stopEntryServer } = require('../src/v100.0/modules/remote-device/entry-server');
+const { startEntryServer, stopEntryServer, localEntryPointUrl } = require('../src/v100.0/modules/remote-device/entry-server');
 const { registries } = require('../src/v100.0/modules/remote-device/manager');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
@@ -231,4 +231,63 @@ test('keep-alive: a conexão que não responde ao ping é encerrada; a que respo
     await waitFor(() => !isConnected(silent.handle), PING_INTERVAL_MS * 5);
     assert.equal(isConnected(responsive.handle), true);
     assert.equal(ok.readyState, WebSocket.OPEN);
+});
+
+test('listagem: 107 sem a classe de cliente local repassada pela borda (C.6.15.5)', async () => {
+    expectError(await call('GET', v100('/devices/c')), 107);
+    const noId = await fetch(`${base}${v100('/devices/c')}`, { headers: { 'X-TV30-Client-Class': 'standAlone' } });
+    assert.equal((await noId.json()).error, 107);
+    const other = await fetch(`${base}${v100('/devices/c')}`, { headers: { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'x' } });
+    assert.equal((await other.json()).error, 107);
+});
+
+test('sequence por classe: sobe a cada available e unavailable, não na troca de conexão (Tabela C.87)', async () => {
+    const sequence = (deviceClass: string) => registries.getSequence(deviceClass);
+    const start = sequence('c');
+    assert.equal(sequence('classe-sem-eventos'), 0);
+
+    const reg = await register();
+    assert.equal(sequence('c'), start);
+
+    const first = await open(reg.url);
+    await waitFor(() => isConnected(reg.handle));
+    assert.equal(sequence('c'), start + 1);
+
+    const firstClosed = new Promise((resolve) => first.on('close', resolve));
+    const second = await open(reg.url);
+    await firstClosed;
+    assert.equal(sequence('c'), start + 1);
+
+    const moved = await call('POST', v100(`/${reg.handle}`), { deviceClass: 'd', supportedTypes: [] });
+    assert.equal(moved.status, 200);
+    assert.equal(sequence('c'), start + 2);
+    const startD = sequence('d');
+
+    second.close();
+    await waitFor(() => !isConnected(reg.handle));
+    assert.equal(sequence('d'), startD + 1);
+
+    const third = await open(reg.url);
+    await waitFor(() => isConnected(reg.handle));
+    const thirdClosed = new Promise((resolve) => third.on('close', resolve));
+    await call('DELETE', v100(`/${reg.handle}`));
+    await thirdClosed;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(sequence('d'), startD + 3);
+});
+
+test('servidores de entrada: cada um aceita só o seu tipo de token; local é ws:// em outra porta', async () => {
+    const reg = await register();
+    const registry = registries.getRegistryByHandle(reg.handle);
+    const localUrl = localEntryPointUrl(registries.addLocalEntryPoint(registry, 'cli', 'standAlone'));
+    assert.match(localUrl, /^ws:\/\/localhost:\d+\/rd\/[A-Za-z0-9_-]+$/);
+    const devicePort = new URL(reg.url).port;
+    const localPort = new URL(localUrl).port;
+    assert.notEqual(devicePort, localPort);
+
+    const deviceTokenOnLocal = reg.url.replace(`:${devicePort}/`, `:${localPort}/`);
+    assert.equal(await connect(deviceTokenOnLocal), 404);
+    const localTokenOnDevice = localUrl.replace(`:${localPort}/`, `:${devicePort}/`);
+    assert.equal(await connect(localTokenOnDevice), 404);
+    assert.equal(await connect(localUrl), 404);
 });
