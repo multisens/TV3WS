@@ -29,6 +29,11 @@ import { startEntryServer } from './v100.0/modules/remote-device/entry-server';
 startEntryServer().catch((err: Error) =>
     console.error(`[v100.0 remote-device] entry server not started: ${err.message}`));
 
+// Notification server of API version 100.0
+import { startNotificationServer } from './v100.0/modules/notifications/server';
+startNotificationServer().catch((err: Error) =>
+    console.error(`[v100.0 notifications] notification server not started: ${err.message}`));
+
 // /manifest (C.3.4). An invalid edge port stops the process at startup.
 import { loadAdvertisedEndpoint, registerManifest } from './manifest';
 registerManifest(app, loadAdvertisedEndpoint());

@@ -1,15 +1,14 @@
 import http, { IncomingMessage } from 'http';
 import https from 'https';
-import { once } from 'events';
 import { Server, Socket } from 'net';
 import { WebSocket, WebSocketServer } from 'ws';
 import core from '../../../core';
 import { tlsMaterial, wsTls } from '../../../tls';
 import { ApiError } from '../../../util';
+import { closeServer, listenOnFreePort } from '../../util/port';
 import { LocalEntryPoint, registries } from './manager';
 import Registry from './registry';
 
-const LISTEN_ATTEMPTS = parseInt(process.env.LISTEN_ATTEMPTS || '10');
 const PING_INTERVAL_MS = parseInt(process.env.PING_INTERVAL_MS || '15000');
 const ENTRY_PATH = 'rd';
 const ENTRY_PREFIX = `/${ENTRY_PATH}/`;
@@ -26,31 +25,6 @@ let deviceServer: Server | undefined;
 let localPort: number | undefined;
 let localServer: Server | undefined;
 let pingTimer: NodeJS.Timeout | undefined;
-
-function generateDynamicallyPort(): number {
-  const min = parseInt(process.env.WS_PORT_MIN || '45000');
-  const max = parseInt(process.env.WS_PORT_MAX || '45199');
-  return Math.floor(min + Math.random() * (max - min));
-}
-
-// Makes the server listen on a free port drawn by generateDynamicallyPort,
-// drawing again while the port is in use, up to LISTEN_ATTEMPTS times.
-// Returns the port; throws if no free port is found or on another error
-async function listenOnFreePort(server: Server): Promise<number> {
-    for (let attempt = 1; attempt <= LISTEN_ATTEMPTS; attempt++) {
-        const port = generateDynamicallyPort();
-        try {
-            server.listen(port);
-            await once(server, 'listening');
-            return port;
-        } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
-                throw err;
-            }
-        }
-    }
-    throw new Error(`no free port after ${LISTEN_ATTEMPTS} attempts`);
-}
 
 // Opens the entry server of the devices, with TLS when wsTls() is on and
 // there is TLS material, and the entry server of the local clients, without
@@ -99,15 +73,6 @@ export async function stopEntryServer(): Promise<void> {
     devicePort = undefined;
     localServer = undefined;
     localPort = undefined;
-}
-
-async function closeServer(server: Server | undefined): Promise<void> {
-    if (!server) {
-        return;
-    }
-    const closing = once(server, 'close');
-    server.close();
-    await closing;
 }
 
 export function isEntryServerListening(): boolean {
