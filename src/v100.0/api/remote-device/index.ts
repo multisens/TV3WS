@@ -2,6 +2,7 @@ import express, { Router } from 'express';
 import controller from './controller';
 import { RegisterBodySchema } from './schema';
 import { validateSchema } from '../../util/validate';
+import { identifyLocalClient } from '../../util/client';
 const router: Router = express.Router();
 
 
@@ -15,6 +16,6 @@ router.post('/:handle', validateSchema(RegisterBodySchema), controller.updateDev
 router.delete('/:handle', controller.removeDevice);
 
 // C.6.15.5 - Enabling communication with a remote device
-router.get('/devices/:classId', controller.listDevices);
+router.get('/devices/:classId', identifyLocalClient, controller.listDevices);
 
 export default router;

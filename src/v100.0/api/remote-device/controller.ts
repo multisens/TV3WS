@@ -1,5 +1,4 @@
 import { Request, Response } from 'express';
-import { returnError } from '../../../util';
 import { RegisterBody } from './schema';
 import service from './service';
 
@@ -20,8 +19,8 @@ function removeDevice(req: Request, res: Response): void {
     res.status(200).json({});
 }
 
-async function listDevices(req: Request, res: Response): Promise<void> {
-    returnError(res, 200, 'not implemented');
+function listDevices(req: Request, res: Response): void {
+    res.status(200).json(service.listDevices(req.params.classId, res.locals.client));
 }
 
 export default { registerDevice, updateDevice, removeDevice, listDevices };
