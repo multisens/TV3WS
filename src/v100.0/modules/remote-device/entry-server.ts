@@ -19,6 +19,7 @@ const alive = new WeakSet<WebSocket>();
 
 // Port of the entry server; undefined while it is not listening
 let port: number | undefined;
+let server: Server | undefined;
 let pingTimer: NodeJS.Timeout | undefined;
 
 function generateDynamicallyPort(): number {
@@ -50,11 +51,12 @@ async function listenOnFreePort(server: Server): Promise<number> {
 // TLS material, on a free port
 export async function startEntryServer(): Promise<void> {
     const tls = wsTls() ? tlsMaterial() : undefined;
-    const server = tls
+    const entryServer = tls
         ? https.createServer({ key: tls.key, cert: tls.cert })
         : http.createServer();
-    server.on('upgrade', onUpgrade);
-    port = await listenOnFreePort(server);
+    entryServer.on('upgrade', onUpgrade);
+    port = await listenOnFreePort(entryServer);
+    server = entryServer;
     console.log(`[v100.0 remote-device] entry server listening on port ${port}`);
 
     pingTimer = setInterval(() => {
@@ -68,6 +70,22 @@ export async function startEntryServer(): Promise<void> {
             }
         }
     }, PING_INTERVAL_MS);
+}
+
+// Stops the ping timer, closes every connection and the server
+export async function stopEntryServer(): Promise<void> {
+    clearInterval(pingTimer);
+    pingTimer = undefined;
+    for (const ws of wss.clients) {
+        ws.terminate();
+    }
+    if (server) {
+        const closing = once(server, 'close');
+        server.close();
+        await closing;
+    }
+    server = undefined;
+    port = undefined;
 }
 
 export function isEntryServerListening(): boolean {
