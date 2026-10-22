@@ -6,7 +6,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import core from '../../../core';
 import { tlsMaterial, wsTls } from '../../../tls';
 import { ApiError } from '../../../util';
-import { registries } from './manager';
+import { LocalEntryPoint, registries } from './manager';
 import Registry from './registry';
 
 const LISTEN_ATTEMPTS = parseInt(process.env.LISTEN_ATTEMPTS || '10');
@@ -57,7 +57,7 @@ async function listenOnFreePort(server: Server): Promise<number> {
 // TLS (C.6.15.5, Table C.80: ws://), each on a free port
 export async function startEntryServer(): Promise<void> {
     const tls = wsTls() ? tlsMaterial() : undefined;
-    const deviceServer = tls
+    deviceServer = tls
         ? https.createServer({ key: tls.key, cert: tls.cert })
         : http.createServer();
     deviceServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
@@ -65,7 +65,7 @@ export async function startEntryServer(): Promise<void> {
     });
     devicePort = await listenOnFreePort(deviceServer);
 
-    const localServer = http.createServer();
+    localServer = http.createServer();
     localServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
         onUpgrade('local', req, socket, head);
     });
@@ -131,8 +131,7 @@ export function localEntryPointUrl(token: string): string {
 }
 
 // Accepts the upgrade to an entry point of the kind served by the server;
-// any other path or token is refused. The upgrade to a local entry point is
-// refused until the communication pair is implemented
+// any other path or token is refused
 function onUpgrade(kind: EntryKind, req: IncomingMessage, socket: Socket, head: Buffer): void {
     const path = new URL(req.url ?? '', 'http://localhost').pathname;
     if (!path.startsWith(ENTRY_PREFIX)) {
@@ -146,15 +145,16 @@ function onUpgrade(kind: EntryKind, req: IncomingMessage, socket: Socket, head: 
         refuse(socket);
         return;
     }
-    if (entryPoint.kind === 'local') {
-        refuse(socket);
-        return;
-    }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
         alive.add(ws);
         ws.on('pong', () => alive.add(ws));
-        onDeviceConnection(entryPoint.registry, ws);
+        if (entryPoint.kind === 'device') {
+            onDeviceConnection(entryPoint.registry, ws);
+        }
+        else {
+            onClientConnection(entryPoint, ws);
+        }
     });
 }
 
@@ -168,5 +168,13 @@ function onDeviceConnection(registry: Registry, ws: WebSocket): void {
     registries.connect(registry, ws);
     ws.on('close', () => registries.disconnect(registry, ws));
     ws.on('error', () => console.log(`Error on socket for device ${registry.handle}`));
-    ws.on('message', () => console.log(`Message on socket for device ${registry.handle}`));
+    ws.on('message', (data, isBinary) => registries.forwardFromDevice(registry, ws, data, isBinary));
+}
+
+function onClientConnection(entryPoint: LocalEntryPoint, ws: WebSocket): void {
+    const registry = entryPoint.registry;
+    registries.connectClient(entryPoint, ws);
+    ws.on('close', () => registries.disconnectClient(registry, ws));
+    ws.on('error', () => console.log(`Error on socket of client ${entryPoint.clientId}`));
+    ws.on('message', (data, isBinary) => registries.forwardFromClient(registry, ws, data, isBinary));
 }

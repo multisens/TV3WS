@@ -1,6 +1,15 @@
 import { v4 as uuidv4 } from 'uuid';
-import { WebSocket } from 'ws';
+import { RawData, WebSocket } from 'ws';
 import { generateToken } from '../../util/token';
+import { ClientType } from '../../util/client';
+import { PairNotice } from './messages';
+
+// Figure C.8: local client in a communication pair with the device
+export type Pair = {
+    ws: WebSocket;
+    clientId: string;
+    clientType: ClientType;
+};
 
 export default class Registry {
     public readonly handle = uuidv4();
@@ -14,6 +23,7 @@ export default class Registry {
     protected localTokens = new Map<string, string>();
     protected ws?: WebSocket;
     protected disconnectedAt: number;
+    protected pair?: Pair;
 
     constructor(deviceClass: string, supportedTypes: string[]) {
         this.deviceClass = deviceClass;
@@ -62,7 +72,30 @@ export default class Registry {
     }
 
     public isPaired(): boolean {
-        return false;
+        return this.pair !== undefined;
+    }
+
+    public getPair(): Pair | undefined {
+        return this.pair;
+    }
+
+    public setPair(pair: Pair | undefined): void {
+        this.pair = pair;
+    }
+
+    // Sends the Table C.86 message to the device, if it is connected
+    public notifyDevice(notice: PairNotice): void {
+        this.ws?.send(JSON.stringify(notice));
+    }
+
+    // C.6.15.5: forwards a message of the local client in the pair to the
+    // device, if it is connected
+    public sendToDevice(data: RawData, isBinary: boolean): void {
+        this.ws?.send(data, { binary: isBinary });
+    }
+
+    public isDeviceConnection(ws: WebSocket): boolean {
+        return this.ws === ws;
     }
 
     // Takes the new connection and closes the previous one, if any. Returns
