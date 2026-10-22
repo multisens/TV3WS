@@ -34,6 +34,11 @@ import { startEntryServer } from './v100.0/modules/remote-device/entry-server';
 startEntryServer().catch((err: Error) =>
     console.error(`[v100.0 remote-device] entry server not started: ${err.message}`));
 
+// Notification server of API version 100.0
+import { startNotificationServer } from './v100.0/modules/notifications/server';
+startNotificationServer().catch((err: Error) =>
+    console.error(`[v100.0 notifications] notification server not started: ${err.message}`));
+
 // /manifest (C.3.4): as portas da borda e o host de sobreposicao, resolvidos
 // no boot; o host de cada resposta sai da requisicao (src/manifest.ts).
 // Porta da borda invalida derruba o processo com log [ssdp] FALHA (D9).
