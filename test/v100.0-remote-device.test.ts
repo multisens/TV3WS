@@ -86,10 +86,19 @@ async function register(): Promise<{ handle: string; url: string }> {
     return r.json;
 }
 
+// Messages and close code of each socket, recorded from its creation, so
+// that nothing sent right after the upgrade is missed
+const received = new WeakMap<WebSocket, unknown[]>();
+const closed = new WeakMap<WebSocket, Promise<number>>();
+
 // Resolves with the open socket, or with the HTTP status of a refused upgrade
 function connect(url: string, options: { autoPong?: boolean } = {}): Promise<WebSocket | number> {
     return new Promise((resolve, reject) => {
         const ws = new WebSocket(url, options);
+        const messages: unknown[] = [];
+        received.set(ws, messages);
+        ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
+        closed.set(ws, new Promise((done) => ws.on('close', (code) => done(code))));
         ws.on('open', () => resolve(ws));
         ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
         ws.on('error', reject);
@@ -289,5 +298,258 @@ test('servidores de entrada: cada um aceita só o seu tipo de token; local é ws
     assert.equal(await connect(deviceTokenOnLocal), 404);
     const localTokenOnDevice = localUrl.replace(`:${localPort}/`, `:${devicePort}/`);
     assert.equal(await connect(localTokenOnDevice), 404);
-    assert.equal(await connect(localUrl), 404);
+});
+
+// Messages received by the socket, in order
+function inbox(ws: WebSocket): unknown[] {
+    return received.get(ws) ?? [];
+}
+
+function closeCode(ws: WebSocket): Promise<number> {
+    return closed.get(ws) ?? Promise.resolve(0);
+}
+
+// Registers and connects a device; returns its registry and socket
+async function connectedDevice(): Promise<{ handle: string; registry: any; device: WebSocket; deviceInbox: unknown[] }> {
+    const reg = await register();
+    const device = await open(reg.url);
+    const deviceInbox = inbox(device);
+    await waitFor(() => isConnected(reg.handle));
+    return { handle: reg.handle, registry: registries.getRegistryByHandle(reg.handle), device, deviceInbox };
+}
+
+const localUrlOf = (registry: any, clientId: string, clientType: string) =>
+    localEntryPointUrl(registries.addLocalEntryPoint(registry, clientId, clientType));
+
+test('par: forma na conexão local; o dispositivo recebe pairFormed (Figura C.8, Tabela C.86)', async () => {
+    const { registry, deviceInbox } = await connectedDevice();
+    const before = registries.getSequence('c');
+    await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 1);
+    assert.deepEqual(deviceInbox, [{ event: 'pairFormed', clientType: 'standAlone' }]);
+    assert.equal(registry.isPaired(), true);
+    assert.equal(registries.getSequence('c'), before + 1);
+});
+
+test('par: segundo stand-alone e segundo associado são recusados com deviceBusy (4001)', async () => {
+    const { registry, deviceInbox } = await connectedDevice();
+    await open(localUrlOf(registry, 'sa1', 'standAlone'));
+    for (const [clientId, clientType] of [['sa2', 'standAlone']]) {
+        const ws = await open(localUrlOf(registry, clientId, clientType));
+        const messages = inbox(ws);
+        assert.equal(await closeCode(ws), 4001);
+        assert.deepEqual(messages, [{ event: 'pairRefused', reason: 'deviceBusy' }]);
+    }
+
+    const other = await connectedDevice();
+    await open(localUrlOf(other.registry, 'associated', 'associated'));
+    const ws = await open(localUrlOf(other.registry, 'associated-2', 'associated'));
+    const messages = inbox(ws);
+    assert.equal(await closeCode(ws), 4001);
+    assert.deepEqual(messages, [{ event: 'pairRefused', reason: 'deviceBusy' }]);
+    await waitFor(() => deviceInbox.length === 1);
+    assert.equal(other.deviceInbox.length, 1);
+});
+
+test('par: dispositivo desconectado recusa com deviceUnavailable (4002)', async () => {
+    const reg = await register();
+    const registry = registries.getRegistryByHandle(reg.handle);
+    const ws = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    const messages = inbox(ws);
+    assert.equal(await closeCode(ws), 4002);
+    assert.deepEqual(messages, [{ event: 'pairRefused', reason: 'deviceUnavailable' }]);
+    assert.equal(registry.isPaired(), false);
+});
+
+test('par: associado sobre stand-alone transfere o par, na ordem da Tabela C.86, sem evento', async () => {
+    const { registry, deviceInbox } = await connectedDevice();
+    const standAlone = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    const standAloneInbox = inbox(standAlone);
+    await waitFor(() => deviceInbox.length === 1);
+    const before = registries.getSequence('c');
+
+    const standAloneClosed = closeCode(standAlone);
+    await open(localUrlOf(registry, 'associated', 'associated'));
+    assert.equal(await standAloneClosed, 4003);
+    assert.deepEqual(standAloneInbox, [{ event: 'pairEnded', reason: 'preemptedByAssociated' }]);
+    await waitFor(() => deviceInbox.length === 3);
+    assert.deepEqual(deviceInbox.slice(1), [
+        { event: 'pairEnded', clientType: 'standAlone' },
+        { event: 'pairFormed', clientType: 'associated' },
+    ]);
+    assert.equal(registry.getPair().clientType, 'associated');
+    assert.equal(registries.getSequence('c'), before);
+});
+
+test('par: nova conexão do mesmo cliente substitui a anterior, sem mensagem ao dispositivo', async () => {
+    const { registry, deviceInbox } = await connectedDevice();
+    const url = localUrlOf(registry, 'sa', 'standAlone');
+    const first = await open(url);
+    await waitFor(() => deviceInbox.length === 1);
+    const firstClosed = closeCode(first);
+    const second = await open(url);
+    await firstClosed;
+    assert.equal(registry.getPair().ws !== undefined, true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(deviceInbox.length, 1);
+    assert.equal(second.readyState, WebSocket.OPEN);
+});
+
+test('par: nova conexão do dispositivo em par recebe pairFormed', async () => {
+    const reg = await register();
+    const registry = registries.getRegistryByHandle(reg.handle);
+    await open(reg.url);
+    await waitFor(() => isConnected(reg.handle));
+    await open(localUrlOf(registry, 'associated', 'associated'));
+    await waitFor(() => registry.isPaired());
+
+    const replacement = await open(reg.url);
+    const messages = inbox(replacement);
+    await waitFor(() => messages.length === 1);
+    assert.deepEqual(messages, [{ event: 'pairFormed', clientType: 'associated' }]);
+});
+
+test('repasse: mensagens vão do cliente do par ao dispositivo e voltam (C.6.15.5)', async () => {
+    const { registry, device, deviceInbox } = await connectedDevice();
+    const client = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 1);
+
+    client.send(JSON.stringify({ type: 'video', capabilities: [{ name: 'state' }] }));
+    await waitFor(() => deviceInbox.length === 2);
+    assert.deepEqual(deviceInbox[1], { type: 'video', capabilities: [{ name: 'state' }] });
+
+    device.send(JSON.stringify({ type: 'video', capabilities: [{ name: 'state', value: 'idle' }] }));
+    await waitFor(() => inbox(client).length === 1);
+    assert.deepEqual(inbox(client)[0], { type: 'video', capabilities: [{ name: 'state', value: 'idle' }] });
+});
+
+test('repasse: o stand-alone preterido não chega mais ao dispositivo', async () => {
+    const { registry, deviceInbox } = await connectedDevice();
+    const standAlone = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 1);
+    const preempted = closeCode(standAlone);
+    await open(localUrlOf(registry, 'associated', 'associated'));
+    await waitFor(() => deviceInbox.length === 3);
+    if (standAlone.readyState === WebSocket.OPEN) {
+        standAlone.send(JSON.stringify({ late: true }));
+    }
+    await preempted;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(deviceInbox.length, 3);
+});
+
+test('fim do par: o cliente fecha; o dispositivo recebe pairEnded e o evento sobe (Figura C.8)', async () => {
+    const { registry, deviceInbox } = await connectedDevice();
+    const client = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 1);
+    const before = registries.getSequence('c');
+
+    client.close();
+    await waitFor(() => deviceInbox.length === 2);
+    assert.deepEqual(deviceInbox[1], { event: 'pairEnded', clientType: 'standAlone' });
+    assert.equal(registry.isPaired(), false);
+    assert.equal(registries.getSequence('c'), before + 1);
+
+    const again = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 3);
+    assert.equal(again.readyState, WebSocket.OPEN);
+});
+
+test('fim do par: o dispositivo cai; o cliente recebe pairEnded/deviceUnavailable (4002), um só evento', async () => {
+    const { registry, device, deviceInbox } = await connectedDevice();
+    const client = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 1);
+    const before = registries.getSequence('c');
+
+    const clientClosed = closeCode(client);
+    device.close();
+    assert.equal(await clientClosed, 4002);
+    assert.deepEqual(inbox(client), [{ event: 'pairEnded', reason: 'deviceUnavailable' }]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(registry.isPaired(), false);
+    assert.equal(registries.getSequence('c'), before + 1);
+});
+
+test('fim do par: o DELETE do registro avisa o cliente com deviceUnavailable (4002)', async () => {
+    const { handle, registry, deviceInbox } = await connectedDevice();
+    const client = await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => deviceInbox.length === 1);
+    const clientClosed = closeCode(client);
+    await call('DELETE', v100(`/${handle}`));
+    assert.equal(await clientClosed, 4002);
+    assert.deepEqual(inbox(client), [{ event: 'pairEnded', reason: 'deviceUnavailable' }]);
+});
+
+const STAND_ALONE = { 'X-TV30-Client-Class': 'standAlone', 'X-TV30-Client-Id': 'cliente-1' };
+const OTHER_STAND_ALONE = { 'X-TV30-Client-Class': 'standAlone', 'X-TV30-Client-Id': 'cliente-2' };
+const ASSOCIATED = { 'X-TV30-Client-Class': 'associated' };
+
+async function list(deviceClass: string, headers: Record<string, string>): Promise<Reply> {
+    const res = await fetch(`${base}${v100(`/devices/${deviceClass}`)}`, { headers });
+    return { status: res.status, apiVersion: res.headers.get('api-version'), json: await res.json() };
+}
+
+async function registerIn(deviceClass: string): Promise<{ handle: string; url: string }> {
+    const r = await call('POST', v100(''), { deviceClass, supportedTypes: ['application/x-ncl360'] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    return r.json;
+}
+
+test('listagem: classe sem dispositivo disponível responde só o sequence (Tabela C.80)', async () => {
+    const r = await list('classe-vazia', STAND_ALONE);
+    assert.equal(r.status, 200);
+    assert.equal(r.apiVersion, '100.0');
+    assert.deepEqual(r.json, { sequence: 0 });
+});
+
+test('listagem: só os conectados, com deviceId distinto do handle, supportedTypes e paired', async () => {
+    const idle = await registerIn('lista-a');
+    const active = await registerIn('lista-a');
+    await open(active.url);
+    await waitFor(() => isConnected(active.handle));
+
+    const r = await list('lista-a', STAND_ALONE);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.sequence, registries.getSequence('lista-a'));
+    assert.equal(r.json.devices.length, 1);
+    const [item] = r.json.devices;
+    assert.deepEqual(Object.keys(item).sort(), ['deviceId', 'paired', 'supportedTypes', 'url']);
+    assert.equal(item.deviceId, registries.getRegistryByHandle(active.handle).deviceId);
+    assert.notEqual(item.deviceId, active.handle);
+    assert.notEqual(item.deviceId, idle.handle);
+    assert.deepEqual(item.supportedTypes, ['application/x-ncl360']);
+    assert.equal(item.paired, false);
+});
+
+test('listagem: url local estável por cliente, distinta entre clientes, ws:// na porta local', async () => {
+    const reg = await registerIn('lista-b');
+    await open(reg.url);
+    await waitFor(() => isConnected(reg.handle));
+
+    const first = (await list('lista-b', STAND_ALONE)).json.devices[0].url;
+    const again = (await list('lista-b', STAND_ALONE)).json.devices[0].url;
+    const other = (await list('lista-b', OTHER_STAND_ALONE)).json.devices[0].url;
+    const associated = (await list('lista-b', ASSOCIATED)).json.devices[0].url;
+
+    assert.equal(first, again);
+    assert.notEqual(first, other);
+    assert.notEqual(first, associated);
+    assert.notEqual(other, associated);
+    assert.match(first, /^ws:\/\/localhost:\d+\/rd\/[A-Za-z0-9_-]+$/);
+    assert.notEqual(new URL(first).port, new URL(reg.url).port);
+});
+
+test('listagem: paired fica true com o par formado pela url listada', async () => {
+    const reg = await registerIn('lista-c');
+    await open(reg.url);
+    await waitFor(() => isConnected(reg.handle));
+
+    const url = (await list('lista-c', ASSOCIATED)).json.devices[0].url;
+    await open(url);
+    const registry = registries.getRegistryByHandle(reg.handle);
+    await waitFor(() => registry.isPaired());
+
+    const r = await list('lista-c', STAND_ALONE);
+    assert.equal(r.json.devices[0].paired, true);
+    assert.equal(r.json.sequence, registries.getSequence('lista-c'));
 });

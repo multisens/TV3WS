@@ -1,13 +1,18 @@
 import { generateToken } from '../../util/token';
 import { ClientType } from '../../util/client';
+import { RawData, WebSocket } from 'ws';
+import {
+    CLOSE_DEVICE_BUSY, CLOSE_DEVICE_UNAVAILABLE, CLOSE_PREEMPTED, sendAndClose,
+} from './messages';
 import Registry from './registry';
-import { WebSocket } from 'ws';
 
 // Entry point identified by a token in the URL path: the one of the device
 // (C.6.15.2) or the local one of a local client for the device (C.6.15.5)
 export type EntryPoint =
     | { kind: 'device'; registry: Registry }
     | { kind: 'local'; registry: Registry; clientId: string; clientType: ClientType };
+
+export type LocalEntryPoint = Extract<EntryPoint, { kind: 'local' }>;
 
 export enum EventType {
     AVAILABLE = 'available',
@@ -38,6 +43,7 @@ class RegistryManager {
         }
         const classChanged = registry.getDeviceClass() !== deviceClass;
         if (classChanged && registry.isConnected()) {
+            this.endPairByUnavailability(registry);
             this.notify(EventType.UNAVAILABLE, registry);
         }
         this.removeFromClass(registry);
@@ -58,6 +64,7 @@ class RegistryManager {
             return false;
         }
         if (registry.isConnected()) {
+            this.endPairByUnavailability(registry);
             this.notify(EventType.UNAVAILABLE, registry);
         }
         this.registryByHandle.delete(handle);
@@ -76,7 +83,52 @@ class RegistryManager {
         const becameAvailable = registry.connect(ws);
         if (becameAvailable) {
             this.notify(EventType.AVAILABLE, registry);
+            return;
         }
+        // Table C.86: the new connection of a device in a pair is told so
+        const pair = registry.getPair();
+        if (pair) {
+            registry.notifyDevice({ event: 'pairFormed', clientType: pair.clientType });
+        }
+    }
+
+    // Figure C.8: decides the connection of a local client to its local entry
+    // point: refuses it, forms the pair, replaces the connection of the same
+    // client or transfers the pair to the associated client. Synchronous: no
+    // await between the decision and the change of the pair
+    public connectClient(entryPoint: LocalEntryPoint, ws: WebSocket): void {
+        const { registry, clientId, clientType } = entryPoint;
+        const pair = registry.getPair();
+
+        if (!registry.isConnected()) {
+            sendAndClose(ws, { event: 'pairRefused', reason: 'deviceUnavailable' }, CLOSE_DEVICE_UNAVAILABLE);
+            return;
+        }
+
+        if (!pair) {
+            registry.setPair({ ws, clientId, clientType });
+            this.notify(EventType.PAIR_FORMED, registry);
+            registry.notifyDevice({ event: 'pairFormed', clientType });
+            return;
+        }
+
+        if (pair.clientId === clientId) {
+            registry.setPair({ ws, clientId, clientType });
+            pair.ws.close();
+            return;
+        }
+
+        // The pair changes before the messages, so that what the stand-alone
+        // client still sends is not forwarded; the transfer has no event
+        if (pair.clientType === 'standAlone' && clientType === 'associated') {
+            registry.setPair({ ws, clientId, clientType });
+            sendAndClose(pair.ws, { event: 'pairEnded', reason: 'preemptedByAssociated' }, CLOSE_PREEMPTED);
+            registry.notifyDevice({ event: 'pairEnded', clientType: 'standAlone' });
+            registry.notifyDevice({ event: 'pairFormed', clientType: 'associated' });
+            return;
+        }
+
+        sendAndClose(ws, { event: 'pairRefused', reason: 'deviceBusy' }, CLOSE_DEVICE_BUSY);
     }
 
     // Figure C.7: the connection of the device closed. Ignores a replaced
@@ -85,8 +137,40 @@ class RegistryManager {
         const wasCurrent = registry.disconnect(ws);
         const isRegistered = this.registryByHandle.get(registry.handle) === registry;
         if (wasCurrent && isRegistered) {
+            this.endPairByUnavailability(registry);
             this.notify(EventType.UNAVAILABLE, registry);
         }
+    }
+
+    // Figure C.8: the connection of a local client closed. Ends the pair if
+    // the socket is the one of the pair; a refused, replaced or preempted
+    // socket is ignored
+    public disconnectClient(registry: Registry, ws: WebSocket): void {
+        const pair = registry.getPair();
+        if (pair?.ws !== ws) {
+            return;
+        }
+        registry.setPair(undefined);
+        this.notify(EventType.PAIR_ENDED, registry);
+        registry.notifyDevice({ event: 'pairEnded', clientType: pair.clientType });
+    }
+
+    // C.6.15.5: forwards a message of the device to the local client in the
+    // pair; a message of a replaced connection of the device is dropped
+    public forwardFromDevice(registry: Registry, ws: WebSocket, data: RawData, isBinary: boolean): void {
+        if (!registry.isDeviceConnection(ws)) {
+            return;
+        }
+        registry.getPair()?.ws.send(data, { binary: isBinary });
+    }
+
+    // C.6.15.5: forwards a message of a local client to the device, only if
+    // the client is the one in the pair
+    public forwardFromClient(registry: Registry, ws: WebSocket, data: RawData, isBinary: boolean): void {
+        if (registry.getPair()?.ws !== ws) {
+            return;
+        }
+        registry.sendToDevice(data, isBinary);
     }
 
     // Removes every registration, as removeRegistry does for each one
@@ -178,6 +262,19 @@ class RegistryManager {
         const deviceClass = registry.getDeviceClass();
         const sequence = this.getSequence(deviceClass) + 1;
         this.sequenceByClass.set(deviceClass, sequence);
+    }
+
+    // C.6.15.5: the device is no longer available; the local client in the
+    // pair is told so and its connection closed. The unavailable event
+    // stands for the end of the pair, and the device gets no Table C.86
+    // message
+    protected endPairByUnavailability(registry: Registry): void {
+        const pair = registry.getPair();
+        if (!pair) {
+            return;
+        }
+        registry.setPair(undefined);
+        sendAndClose(pair.ws, { event: 'pairEnded', reason: 'deviceUnavailable' }, CLOSE_DEVICE_UNAVAILABLE);
     }
 
     protected addToClass(registry: Registry): void {
