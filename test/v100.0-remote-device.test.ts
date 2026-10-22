@@ -37,6 +37,7 @@ stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
 const app = require('../src/app').default;
 const { startEntryServer, stopEntryServer, localEntryPointUrl } = require('../src/v100.0/modules/remote-device/entry-server');
 const { registries } = require('../src/v100.0/modules/remote-device/manager');
+const { startNotificationServer, stopNotificationServer } = require('../src/v100.0/modules/notifications/server');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const PING_INTERVAL_MS = 100;
@@ -50,9 +51,11 @@ before(async () => {
     });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     await startEntryServer();
+    await startNotificationServer();
 });
 after(async () => {
     await stopEntryServer();
+    await stopNotificationServer();
     await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 beforeEach(() => {
@@ -552,4 +555,60 @@ test('listagem: paired fica true com o par formado pela url listada', async () =
     const r = await list('lista-c', STAND_ALONE);
     assert.equal(r.json.devices[0].paired, true);
     assert.equal(r.json.sequence, registries.getSequence('lista-c'));
+});
+
+// Registers a listener of the remote-device event class and opens its
+// WebSocket; returns the events it receives
+async function listen(query = ''): Promise<unknown[]> {
+    const res = await fetch(`${base}/v100.0/tv3/notifications/remote-device${query}`, { headers: STAND_ALONE });
+    const reg = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(reg));
+    const ws = await open(reg.url);
+    return inbox(ws);
+}
+
+test('eventos remote-device: available, pairFormed, pairEnded e unavailable, em ordem (C.6.15.6)', async () => {
+    const events = await listen();
+    const reg = await registerIn('eventos-a');
+    const device = await open(reg.url);
+    await waitFor(() => isConnected(reg.handle));
+    const listed = (await list('eventos-a', STAND_ALONE)).json;
+    const deviceId = listed.devices[0].deviceId;
+
+    const client = await open(listed.devices[0].url);
+    await waitFor(() => events.length === 2);
+    client.close();
+    await waitFor(() => events.length === 3);
+    device.close();
+    await waitFor(() => events.length === 4);
+
+    const first = listed.sequence;
+    assert.deepEqual(events, [
+        { eventType: 'available', classId: 'eventos-a', deviceId, sequence: first },
+        { eventType: 'pairFormed', classId: 'eventos-a', deviceId, sequence: first + 1 },
+        { eventType: 'pairEnded', classId: 'eventos-a', deviceId, sequence: first + 2 },
+        { eventType: 'unavailable', classId: 'eventos-a', deviceId, sequence: first + 3 },
+    ]);
+    assert.equal(registries.getSequence('eventos-a'), first + 3);
+});
+
+test('eventos remote-device: filtro classId; recusa e transferência não geram evento', async () => {
+    const filtered = await listen('?classId=eventos-b');
+    const elsewhere = await listen('?classId=outra');
+    const reg = await registerIn('eventos-b');
+    await open(reg.url);
+    await waitFor(() => filtered.length === 1);
+    const registry = registries.getRegistryByHandle(reg.handle);
+
+    await open(localUrlOf(registry, 'sa1', 'standAlone'));
+    await waitFor(() => filtered.length === 2);
+    const refused = await open(localUrlOf(registry, 'sa2', 'standAlone'));
+    await closeCode(refused);
+    const preempted = await open(localUrlOf(registry, 'sa1', 'standAlone'));
+    await open(localUrlOf(registry, 'associated', 'associated'));
+    await closeCode(preempted);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.deepEqual(filtered.map((e: any) => e.eventType), ['available', 'pairFormed']);
+    assert.equal(elsewhere.length, 0);
 });
