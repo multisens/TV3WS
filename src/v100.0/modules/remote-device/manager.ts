@@ -4,6 +4,7 @@ import { RawData, WebSocket } from 'ws';
 import {
     CLOSE_DEVICE_BUSY, CLOSE_DEVICE_UNAVAILABLE, CLOSE_PREEMPTED, sendAndClose,
 } from './messages';
+import { listeners } from '../notifications/listeners';
 import Registry from './registry';
 
 // Entry point identified by a token in the URL path: the one of the device
@@ -20,6 +21,18 @@ export enum EventType {
     PAIR_FORMED = 'pairFormed',
     PAIR_ENDED = 'pairEnded'
 };
+
+// C.6.15.6, Table C.87
+export const REMOTE_DEVICE_EVENT_CLASS = 'remote-device';
+
+export type RemoteDeviceEvent = {
+    eventType: EventType;
+    classId: string;
+    deviceId: string;
+    sequence: number;
+};
+
+listeners.defineEventClass(REMOTE_DEVICE_EVENT_CLASS);
 
 class RegistryManager {
     protected registryByHandle = new Map<string, Registry>();
@@ -255,13 +268,17 @@ class RegistryManager {
     }
 
     // Table C.87: increments the sequence number of the class of the
-    // registry at each event of the class
-    // TODO: deliver the event to the listeners of the remote-device event
-    // class (C.6.15.6, C.6.2)
+    // registry and delivers the event to the listeners of the remote-device
+    // event class, unfiltered or filtered by that class
     protected notify(eventType: EventType, registry: Registry): void {
         const deviceClass = registry.getDeviceClass();
         const sequence = this.getSequence(deviceClass) + 1;
         this.sequenceByClass.set(deviceClass, sequence);
+
+        const event: RemoteDeviceEvent = { eventType, classId: deviceClass, deviceId: registry.deviceId, sequence };
+        listeners.publish(REMOTE_DEVICE_EVENT_CLASS, event, (params) => {
+            return params.classId === undefined || params.classId === deviceClass;
+        });
     }
 
     // C.6.15.5: the device is no longer available; the local client in the
