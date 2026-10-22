@@ -13,11 +13,12 @@ export default class Registry {
     // Token of the local entry point of each local client, by clientId
     protected localTokens = new Map<string, string>();
     protected ws?: WebSocket;
-    protected disconnectedAt?: number;
+    protected disconnectedAt: number;
 
     constructor(deviceClass: string, supportedTypes: string[]) {
         this.deviceClass = deviceClass;
         this.supportedTypes = supportedTypes;
+        this.disconnectedAt = Date.now();
     }
 
     public getDeviceClass(): string {
@@ -30,6 +31,10 @@ export default class Registry {
 
     public getLocalTokens(): string[] {
         return [...this.localTokens.values()];
+    }
+
+    public getDisconnectedAt(): number {
+        return this.disconnectedAt;
     }
 
     public setLocalToken(clientId: string, token: string): void {
@@ -56,7 +61,6 @@ export default class Registry {
     public connect(ws: WebSocket): void {
         const previous = this.ws;
         this.ws = ws;
-        this.disconnectedAt = undefined;
         previous?.close();
     }
 
