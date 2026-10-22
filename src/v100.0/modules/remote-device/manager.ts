@@ -53,6 +53,10 @@ class RegistryManager {
         return true;
     }
 
+    public size(): number {
+        return this.registryByHandle.size;
+    }
+
     public getRegistryByClass(deviceClass: string): Set<Registry> {
         return this.registryByClass.get(deviceClass) ?? new Set<Registry>();
     }
@@ -63,6 +67,25 @@ class RegistryManager {
 
     public getEntryPoint(token: string): EntryPoint | undefined {
         return this.entryPointByToken.get(token);
+    }
+
+    // C.6.15.2, Table C.76: removes the registration disconnected for the
+    // longest time. Returns false if every registration is connected
+    public discardOldestDisconnected(): boolean {
+        let oldest: Registry | undefined;
+        for (const registry of this.registryByHandle.values()) {
+            if (registry.isConnected()) {
+                continue;
+            }
+            if (!oldest || registry.getDisconnectedAt() < oldest.getDisconnectedAt()) {
+                oldest = registry;
+            }
+        }
+        if (!oldest) {
+            return false;
+        }
+        this.removeRegistry(oldest.handle);
+        return true;
     }
 
     // Returns the token of the local entry point of the client for the

@@ -3,6 +3,9 @@ import { entryPointUrl, isEntryServerListening } from '../../modules/remote-devi
 import { registries } from '../../modules/remote-device/manager';
 import { RegisterBody } from './schema';
 
+// Receiver limit on devices to register
+const MAX_REGISTRATIONS = parseInt(process.env.MAX_REGISTRATIONS || '32');
+
 // C.6.15.2, Table C.76: url only in the response of a new registration
 export type RegisterResponse = {
     handle: string;
@@ -14,6 +17,14 @@ export type RegisterResponse = {
 function registerDevice(body: RegisterBody): RegisterResponse {
     if (!isEntryServerListening()) {
         throw new ApiError(200, 'entry server is not listening');
+    }
+
+    if (registries.size() >= MAX_REGISTRATIONS) {
+        const discarded = registries.discardOldestDisconnected();
+
+        if (!discarded) {
+            throw new ApiError(200, 'maximum number of registries exceeded');
+        }
     }
     const registry = registries.addRegistry(body.deviceClass, body.supportedTypes);
     const url = entryPointUrl(registry.token);
