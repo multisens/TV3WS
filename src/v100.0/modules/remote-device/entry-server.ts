@@ -9,14 +9,17 @@ import { ApiError } from '../../../util';
 import { registries } from './manager';
 import Registry from './registry';
 
-const LISTEN_ATTEMPTS = 10;
+const LISTEN_ATTEMPTS = parseInt(process.env.LISTEN_ATTEMPTS || '10');
+const PING_INTERVAL_MS = parseInt(process.env.PING_INTERVAL_MS || '15000');
 const ENTRY_PATH = 'rd';
 const ENTRY_PREFIX = `/${ENTRY_PATH}/`;
 
 const wss = new WebSocketServer({ noServer: true });
+const alive = new WeakSet<WebSocket>();
 
 // Port of the entry server; undefined while it is not listening
 let port: number | undefined;
+let pingTimer: NodeJS.Timeout | undefined;
 
 function generateDynamicallyPort(): number {
   const min = parseInt(process.env.WS_PORT_MIN || '45000');
@@ -53,6 +56,18 @@ export async function startEntryServer(): Promise<void> {
     server.on('upgrade', onUpgrade);
     port = await listenOnFreePort(server);
     console.log(`[v100.0 remote-device] entry server listening on port ${port}`);
+
+    pingTimer = setInterval(() => {
+        for (const ws of wss.clients) {
+            if (alive.has(ws)) {
+                alive.delete(ws);
+                ws.ping();
+            }
+            else {
+                ws.terminate();
+            }
+        }
+    }, PING_INTERVAL_MS);
 }
 
 export function isEntryServerListening(): boolean {
@@ -84,6 +99,8 @@ function onUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
+        alive.add(ws);
+        ws.on('pong', () => alive.add(ws));
         onDeviceConnection(entryPoint.registry, ws);
     });
 }
