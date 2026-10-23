@@ -8,7 +8,7 @@ router.post("/", controller.POSTRemoteDevice);
 // C.6.15.3 Deregistering a remote device
 router.delete("/:handle", controller.DELETERemoteDevice);
 
-// C.6.15.5 Obtaining the list of registered remote devices
+// C.6.15.5 Enabling communication with a remote device
 router.get("/devices/:classId", controller.GETRemoteDevices);
 
 export default router;
