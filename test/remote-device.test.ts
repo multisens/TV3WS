@@ -1,16 +1,21 @@
 // Registro e remocao de remote-device (C.6.15.2, C.6.15.3) com Redis, core e MQTT por dubles. Com o Redis
 // fora, 404 {error:200} sem porta aberta nem registro pela metade; o descadastro fecha as portas; porta
-// sorteada ocupada sorteia outra.
+// sorteada ocupada sorteia outra. Esquema dos pontos de entrada: wss:// no do dispositivo remoto, com o
+// certificado do receptor; ws:// no local.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
 import net, { AddressInfo } from 'net';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import { execFileSync } from 'child_process';
 import { Server } from 'http';
 import express from 'express';
+import { WebSocket } from 'ws';
 import { createFakeRedis } from './helpers/fake-redis';
 
-// pontos de entrada em ws:// aqui, independente do certificado da maquina
+// registro em ws:// aqui, independente do certificado da maquina (o teste de TLS o liga)
 process.env.TV3WS_WS_TLS = 'false';
 
 const fake = createFakeRedis();
@@ -39,7 +44,7 @@ stub('mqtt-client', {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const remoteDeviceAPI = require('../src/api/remote-device').default;
+const { default: remoteDeviceAPI, routerV100: remoteDeviceV100API } = require('../src/api/remote-device');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const basic = require('../src/middleware/basic').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -47,7 +52,9 @@ const manager = require('../src/modules/remotedevice-manager/manager') as typeof
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { LISTEN_ATTEMPTS } = require('../src/modules/remotedevice-manager/entry-point') as typeof import('../src/modules/remotedevice-manager/entry-point');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { errorHandler } = require('../src/util') as typeof import('../src/util');
+const { apiNotFound, errorHandler } = require('../src/util') as typeof import('../src/util');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const tls = require('../src/tls') as typeof import('../src/tls');
 
 // porta livre, escutando como o ponto de entrada (sem host: todas as
 // interfaces), para o EADDRINUSE acontecer igual no Windows e no Linux
@@ -87,23 +94,30 @@ function portRange(min: number, max = min): void {
 const portOfUrl = (url: string) => Number(new URL(url).port);
 
 let server: Server;
-let base = '';
+let root = '';
 let wsPort = 0;
 before(async () => {
     wsPort = await freePort();
     portRange(wsPort);
+    // a montagem do app.ts: a 100.0 chega da borda com o prefixo /v100.0
     const app = express();
     app.use(express.json());
-    app.use('/tv3', basic);   // res.locals.apiVersion (rotas por handle so na 100.0)
+    app.use('/tv3', basic);
+    app.use('/v100.0/tv3', basic);
     app.use('/tv3/remote-device', remoteDeviceAPI);
+    app.use('/v100.0/tv3/remote-device', remoteDeviceV100API);
+    app.use('/tv3', apiNotFound);
+    app.use('/v100.0/tv3', apiNotFound);
     app.use(errorHandler);
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
-    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3/remote-device`;
+    root = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
 
-async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = {}) {
-    const res = await fetch(`${base}${route}`, {
+const BASE = '/tv3/remote-device';
+const BASE_V100 = '/v100.0/tv3/remote-device';
+async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = {}, base = BASE) {
+    const res = await fetch(`${root}${base}${route}`, {
         method,
         headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -116,8 +130,9 @@ const expectError = (r: { status: number; json: any }, code: number) => {
     assert.equal(r.json?.error, code, JSON.stringify(r.json));
 };
 const BODY = { deviceClass: 'teste', supportedTypes: ['light'] };
-// versao negociada pela borda; o fluxo por handle so existe na 100.0
+// como a borda repassa a 100.0: caminho /v100.0 e a versao negociada no cabecalho
 const V100 = { 'X-TV30-API-Version': '100.0' };
+const call100 = (method: string, route: string) => call(method, route, undefined, V100, BASE_V100);
 
 test('Redis fora do ar no registro: 404 {error:200}, sem porta aberta, sem registro nem publicacao', async () => {
     portRange(wsPort);
@@ -235,18 +250,18 @@ test('100.0: DELETE /device/{handle} fecha a porta local e a ativacao seguinte a
     const handle: string = r.json.handle;
 
     portRange(localPort);
-    const ep = await call('GET', `/device/${handle}`, undefined, V100);
+    const ep = await call100('GET', `/device/${handle}`);
     assert.equal(ep.status, 200, JSON.stringify(ep.json));
     assert.equal(portOfUrl(ep.json.url), localPort);
     assert.equal(await listening(localPort), true);
 
-    assert.equal((await call('DELETE', `/device/${handle}`, undefined, V100)).status, 204);
+    assert.equal((await call100('DELETE', `/device/${handle}`)).status, 204);
     assert.equal(await listening(localPort), false, 'porta local fechada pelo DELETE /device/{handle}');
     assert.equal(await listening(devPort), true, 'o dispositivo continua registrado');
 
     const nextPort = await freePort();
     portRange(nextPort);
-    const ep2 = await call('GET', `/device/${handle}`, undefined, V100);
+    const ep2 = await call100('GET', `/device/${handle}`);
     assert.equal(ep2.status, 200, JSON.stringify(ep2.json));
     assert.equal(portOfUrl(ep2.json.url), nextPort, 'nova ativacao nao devolve o endereco fechado');
     assert.equal(await listening(nextPort), true);
@@ -266,8 +281,8 @@ test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', asyn
     const p = await freePortPair();
     portRange(p, p + 2);   // sem trava, o segundo pedido abriria a outra porta
     const [a, b] = await Promise.all([
-        call('GET', `/device/${handle}`, undefined, V100),
-        call('GET', `/device/${handle}`, undefined, V100),
+        call100('GET', `/device/${handle}`),
+        call100('GET', `/device/${handle}`),
     ]);
     assert.equal(a.status, 200, JSON.stringify(a.json));
     assert.equal(b.status, 200, JSON.stringify(b.json));
@@ -277,6 +292,106 @@ test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', asyn
 
     assert.equal((await call('DELETE', `/${handle}`)).status, 204);
     assert.equal(await listening(portOfUrl(a.json.url)), false);
+});
+
+test('a rota escolhe o codigo, nao o X-TV30-API-Version: /v100.0 lista so handles, /tv3 lista com url', async () => {
+    const devPort = await freePort();
+    const localPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const handle: string = r.json.handle;
+    portRange(localPort);
+
+    // /v100.0 sem o cabecalho: o codigo da 100.0, sem abrir ponto de entrada
+    const handles = await call('GET', '/devices/teste', undefined, {}, BASE_V100);
+    assert.equal(handles.status, 200, JSON.stringify(handles.json));
+    assert.deepEqual(handles.json.devices.find((d: { handle: string }) => d.handle === handle), { handle, supportedTypes: ['light'] });
+    assert.equal(await listening(localPort), false);
+
+    // caminho publico com o cabecalho da 100.0: o codigo da 2.0 (C.6.15.5, com url)
+    const withUrl = await call('GET', '/devices/teste', undefined, V100);
+    assert.equal(withUrl.status, 200, JSON.stringify(withUrl.json));
+    assert.equal(withUrl.json.devices.find((d: { handle: string }) => d.handle === handle).url, `ws://localhost:${localPort}`);
+
+    // as rotas por handle so existem sob /v100.0
+    for (const m of ['GET', 'DELETE']) expectError(await call(m, `/device/${handle}`, undefined, V100), 100);
+    expectError(await call100('GET', '/device/nao-existe'), 101);
+
+    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+    assert.equal(await listening(localPort), false);
+});
+
+// certificado autoassinado como o do tls-init (infra/edgegateway/tls-init.sh); sem openssl, undefined
+function selfSignedCert(): string | undefined {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv30-ws-tls-'));
+    try {
+        execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+            '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-keyout', path.join(dir, 'key.pem'),
+            '-out', path.join(dir, 'cert.pem')], { stdio: 'ignore' });
+        return dir;
+    } catch {
+        fs.rmSync(dir, { recursive: true, force: true });
+        return undefined;
+    }
+}
+function connects(url: string, ca?: Buffer): Promise<WebSocket> {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(url, ca ? { ca } : {});
+        ws.once('open', () => resolve(ws));
+        ws.once('error', reject);
+    });
+}
+const closed = (ws: WebSocket) => new Promise<void>(resolve => {
+    if (ws.readyState === WebSocket.CLOSED) resolve(); else ws.once('close', () => resolve());
+});
+
+test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de entrada local em ws:// (C.6.15.5 e 100.0)', async (t) => {
+    const dir = selfSignedCert();
+    if (!dir) { t.skip('openssl indisponivel para gerar o certificado de teste'); return; }
+    const saved = { dir: process.env.TV30_TLS_DIR, flag: process.env.TV3WS_WS_TLS };
+    process.env.TV30_TLS_DIR = dir;
+    delete process.env.TV3WS_WS_TLS;
+    tls._resetTlsCache();
+    const cert = fs.readFileSync(path.join(dir, 'cert.pem'));
+    try {
+        const devPort = await freePort();
+        portRange(devPort);
+        const r = await call('POST', '/', BODY);
+        assert.equal(r.status, 200, JSON.stringify(r.json));
+        const handle: string = r.json.handle;
+        assert.equal(r.json.url, `wss://localhost:${devPort}`);
+
+        const localPort = await freePort();
+        portRange(localPort);
+        const list = await call('GET', '/devices/teste');
+        assert.equal(list.json.devices.find((d: { handle: string }) => d.handle === handle).url, `ws://localhost:${localPort}`);
+        (await connects(`ws://localhost:${localPort}`)).close();
+
+        assert.equal((await call100('DELETE', `/device/${handle}`)).status, 204);
+        const nextPort = await freePort();
+        portRange(nextPort);
+        const ep = await call100('GET', `/device/${handle}`);
+        assert.equal(ep.json.url, `ws://localhost:${nextPort}`);
+        (await connects(ep.json.url)).close();
+
+        // o aparelho que confia no serverCert conecta ao wss:// do registro
+        const device = await connects(r.json.url, cert);
+        assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+        await closed(device);
+
+        // TV3WS_WS_TLS=false vale so para o ponto de entrada do dispositivo remoto
+        process.env.TV3WS_WS_TLS = 'false';
+        portRange(devPort);
+        const plain = await call('POST', '/', BODY);
+        assert.equal(plain.json.url, `ws://localhost:${devPort}`);
+        assert.equal((await call('DELETE', `/${plain.json.handle}`)).status, 204);
+    } finally {
+        if (saved.dir === undefined) delete process.env.TV30_TLS_DIR; else process.env.TV30_TLS_DIR = saved.dir;
+        process.env.TV3WS_WS_TLS = saved.flag ?? 'false';
+        tls._resetTlsCache();
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 });
 
 after(async () => {

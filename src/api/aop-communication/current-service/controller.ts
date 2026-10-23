@@ -13,7 +13,7 @@ type CurrentServiceResponse = {
 
 // C.6.3.1 (Tabela C.8). Servico em uso = ultimo valor de aop/currentService; vazio ou nunca recebido -> 300,
 // o mesmo criterio da borda na C.6.8. O 302 nao e emitido: o testbed nao modela recepcao de sinal.
-// serviceId sem valor inteiro conhecido e omitido (C.3.2.2); nenhum modulo publica aop/services.
+// serviceId sem valor inteiro conhecido e omitido (C.3.2.2): sem SLT, aop/services nao o traz.
 function GETCurrentService(req: Request, res: Response): void {
 	if (!core.app.sid) {
 		returnError(res, 300);

@@ -19,7 +19,7 @@ type PairingPopUp = 'qrcode' | 'pin';
 // primeiro. No nao local que aceitou, ela passa ao pop-up do pareamento sem janela. Sai no fim do
 // /tv3/authorize, no sucesso do pareamento ou no fim da trava; so em memoria, como o material do pareamento.
 export const YESNO_TIMEOUT_MS = 10 * 1000;
-// gravacoes do Redis entre o "sim" e o pop-up do pareamento (cada comando desiste em 1,5 s)
+// gravacao do Redis entre a resposta ao sim/nao e o fim do pedido (cada comando desiste em 1,5 s)
 const YESNO_FOLGA_MS = 5 * 1000;
 
 export type Reserva = { tipo: 'yesno' | PairingPopUp; dono: string; ate: number };

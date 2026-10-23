@@ -28,7 +28,9 @@ const ACCESS_TOKEN_TTL = 24 * 60 * 60;
 // - clients:authorized  SET   clientids autorizados pelo espectador;
 // - clients:blocked     SET   clientids recusados (a borda recusa o token deles com 107).
 // Um clientid fica em no maximo um dos conjuntos; as funcoes do Redis (redis-funcoes.ts) mantem isso.
-// O Map em memoria e cache do objeto vivo, que carrega tambem o material de pareamento.
+// authorizedClients e cache do objeto vivo de quem esta gravado. pendingClients guarda o nao local que
+// aceitou o pop-up, com o material do pareamento, ate o /tv3/token que confere o desafio (C.4.2.3); so em
+// memoria, um reinicio do tv3ws o perde.
 import redis from '../../redis-client';
 import * as funcoes from '../../redis-funcoes';
 
@@ -37,6 +39,7 @@ const AUTHORIZED_KEY = 'clients:authorized';
 const BLOCKED_KEY = 'clients:blocked';
 
 const authorizedClients = new Map<string, Client>();
+const pendingClients = new Map<string, Client>();
 
 function clientFields(client: Client): Record<string, string> {
     const fields: Record<string, string> = {
@@ -58,7 +61,8 @@ export async function isAuthorized(id: string): Promise<boolean> {
     return (await redis.sismember(AUTHORIZED_KEY, id)) === 1;
 }
 
-// Para o 101 no reuso de clientid (C.6.1.2, Tabela C.3). 'used' inclui quem so tem o registro client:{id}.
+// Para o 101 no reuso de clientid (C.6.1.2, Tabela C.3). 'used' inclui quem so tem o registro client:{id};
+// a tentativa pendente do nao local nao conta.
 export type ClientIdStatus = 'new' | 'used' | 'blocked';
 
 export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
@@ -71,9 +75,34 @@ export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
     return 'new';
 }
 
-export async function AuthorizeClient(id: string, clientClass: ClientClass = 'local-autonomous'): Promise<void> {
+export async function AuthorizeClient(id: string, clientClass: ClientClass = 'local-autonomous'): Promise<Client> {
     const client = new Client(id, clientClass);
     await funcoes.clienteAutoriza(id, clientFields(client));
+    authorizedClients.set(id, client);
+    return client;
+}
+
+// "Sim" do nao local: nada vai ao Redis antes do pareamento concluido (C.4.2.3).
+export function StartPairing(id: string): Client {
+    const client = new Client(id, 'non-local');
+    pendingClients.set(id, client);
+    return client;
+}
+
+export function GetPendingClient(id: string): Client | undefined {
+    return pendingClients.get(id);
+}
+
+// Um novo /tv3/authorize do mesmo clientid encerra a tentativa pendente.
+export function DiscardPending(id: string): void {
+    pendingClients.delete(id);
+}
+
+// challenge-response conferido: grava a autorizacao; se a gravacao falhar, o cliente segue pendente.
+export async function AuthorizePairedClient(client: Client): Promise<void> {
+    const id = client.getId();
+    await funcoes.clienteAutoriza(id, clientFields(client));
+    if (pendingClients.get(id) === client) pendingClients.delete(id);
     authorizedClients.set(id, client);
 }
 
@@ -81,6 +110,7 @@ export async function AuthorizeClient(id: string, clientClass: ClientClass = 'lo
 // fica, para que um desbloqueio (tela da C.4.2.2, nao implementada) restaure a autorizacao.
 export async function BlockClient(id: string): Promise<void> {
     authorizedClients.delete(id);
+    pendingClients.delete(id);
     await funcoes.clienteBloqueia(id);
 }
 

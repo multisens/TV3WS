@@ -111,6 +111,19 @@ test('POST current-user (C.6.14.4): grava a sessao e publica retido, sem lastAcc
     assert.equal((store.get(`user:${U1}`) as Record<string, string>).lastAccess, undefined);
 });
 
+test('POST current-user (Tabela C.73): 305 para id inexistente, 405 sem acesso, 300 sem servico; nada gravado', async () => {
+    seedProfiles('svc-a');
+    store.set('session:current-user', U1);
+    const antes = published.length;
+    expectError(await call('POST', '/current-service/users/current-user', { id: U9 }), 305);
+    store.set(`user:${U1}:consent`, new Set(['svc-b']));
+    expectError(await call('POST', '/current-service/users/current-user', { id: U1 }), 405);
+    store.delete('session:current-service-id');
+    expectError(await call('POST', '/current-service/users/current-user', { id: U1 }), 300);
+    assert.equal(store.get('session:current-user'), U1);
+    assert.equal(published.length, antes);
+});
+
 // --- falha do Redis -----------------------------------------------------------------
 test('Redis normal: a listagem C.6.14.1 devolve o perfil visivel', async () => {
     seedProfiles('svc-a');

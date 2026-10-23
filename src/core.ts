@@ -19,11 +19,9 @@ type CoreData = {
     url: string;
     nodes: AppNode[];
   };
+  // aop/services (infra/mqtt-broker/plugin/config/schemas.json)
   services: {
-    serviceId: number;
-    serviceName: string;
-    serviceIcon: string;
-    initialMediaURL: string;
+    serviceContextId: string;
   }[];
   current: {
     serviceName: string;
@@ -159,11 +157,9 @@ function currentService(sid: string): void {
   data.app.id = "";
   data.app.url = "";
   data.app.nodes = [];
-  // aop/services nao tem publicador nem formato definido; indexado pelo id como texto, pois
-  // Number() de um globalServiceId em URN da NaN
-  const svc = sid ? (data.services as unknown as Record<string, { serviceId?: unknown; serviceName?: string }>)[sid] : undefined;
-  data.current.serviceId = svc?.serviceId as number;
-  data.current.serviceName = svc?.serviceName ?? '';
+  // sem SLT nao ha serviceId nem serviceName: aop/services so traz o serviceContextId
+  data.current.serviceId = -1;
+  data.current.serviceName = '';
   data.current.serviceContextId = sid;
   // sem servico corrente o hash da sessao fica como estava: o esquema exige serviceContextId
   if (!sid) return;
@@ -182,10 +178,19 @@ function currentService(sid: string): void {
 
 mqttClient.addTopicHandler(TOPICS.current_service, currentService);
 
+// Os servicos anunciados na LLS, retido, publicado pelo AoP (aop-transport-layer-metadata-lls);
+// mensagem vazia apaga o retido: nenhum servico
 function loadServiceData(m: string): void {
-  if (!m) return;
-
-  data.services = JSON.parse(m);
+  let list: unknown = [];
+  try {
+    if (m) list = JSON.parse(m);
+  } catch (err) {
+    logger.error(`[MQTT] ${TOPICS.services} ignorado: ${(err as Error).message}`);
+    return;
+  }
+  data.services = Array.isArray(list)
+    ? list.filter((s): s is { serviceContextId: string } => typeof s?.serviceContextId === 'string')
+    : [];
 }
 
 mqttClient.addTopicHandler(TOPICS.services, loadServiceData);

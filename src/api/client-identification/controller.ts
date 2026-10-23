@@ -74,11 +74,9 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
 async function authorizeReserved(res: Response, clientId: string, displayName: string,
                                  pm: string, key: string, clientClass: ClientClass, local: boolean,
                                  reserva: { r?: Reserva }): Promise<void> {
-    const authorized = await checkAuthorization(clientId as string, displayName as string, clientClass, res, reserva);
-    logger.debug(`GETAuthorize received authorized = ${authorized}`);
-    if (!authorized) return;
-
-    const client = await manager.GetAuthorizedClient(clientId);
+    const client = await checkAuthorization(clientId as string, displayName as string, clientClass, res, reserva);
+    logger.debug(`GETAuthorize received authorized = ${client !== undefined}`);
+    if (client === undefined) return;
 
     if (local) {
         logger.debug(`Request came from local client (${clientClass})`);
@@ -143,36 +141,41 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
 // Clientid ja usado da 101 para qualquer classe, sem pop-up (Tabela C.3; C.6.1.4.4): em clients:authorized,
 // em clients:blocked ou com registro client:{id}. Bloqueado tambem da 101 (nota da Tabela C.3); o 102 fica
 // para a recusa no pop-up. Quem perdeu o refresh token repete com clientid novo (C.6.1.4.5).
+// A tentativa pendente do nao local nao conta: o novo pedido a descarta e segue como novo.
+// Devolve o cliente autorizado (o nao local, ainda pendente) ou undefined, com o erro ja respondido.
 async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response,
-                                  reserva: { r?: Reserva }): Promise<boolean> {
+                                  reserva: { r?: Reserva }): Promise<Client | undefined> {
     const status = await manager.clientIdStatus(clientId as string);
     if (status === 'used') {
         returnError(res, 101, 'clientid has been used before (already authorized); retry with a new clientid.');
-        return false;
+        return undefined;
     }
 
     if (status === 'blocked') {
         returnError(res, 101, 'clientid has been used before (blocked by the viewer); retry with a new clientid.');
-        return false;
+        return undefined;
     }
+
+    manager.DiscardPending(clientId);
 
     // 103 com a camada grafica ocupada (C.4.2.3, Tabela C.3), so para quem chegaria ao pop-up. Entre a
     // reserva e a publicacao do sim/nao nao ha await: dois pedidos nao reservam juntos.
     reserva.r = service.reservarCamada(clientId);
     if (!reserva.r) {
         returnError(res, 103, 'another authorization or pairing pop-up is on screen; try again later.');
-        return false;
+        return undefined;
     }
 
     const authorized = await service.askAuthorization(displayName as string);
-    if (authorized) {
-        await manager.AuthorizeClient(clientId, clientClass);
-    }
-    else {
+    if (!authorized) {
+        // a recusa e gravada na hora para as duas classes: o pareamento so comeca depois do sim (C.4.2.3)
         await manager.BlockClient(clientId);
         returnError(res, 102, 'Viewer did not authorize the client.');
+        return undefined;
     }
-    return authorized;
+    // o sim do nao local so e gravado quando o /tv3/token confere o desafio
+    if (clientClass === 'non-local') return manager.StartPairing(clientId);
+    return manager.AuthorizeClient(clientId, clientClass);
 }
 
 async function GETToken(req: Request, res: Response): Promise<void> {
@@ -182,13 +185,16 @@ async function GETToken(req: Request, res: Response): Promise<void> {
     const challengeResponse = queryParam(req, 'challenge-response') as string;
     const refreshToken = queryParam(req, 'refresh-token') as string;
 
-    if (clientId !== undefined && !(await manager.isAuthorized(clientId))) {
+    // Sem refresh-token vale a tentativa pendente do nao local, que so e gravada com o challenge-response
+    // conferido; com ele, so a autorizacao gravada.
+    const pending = clientId !== undefined && refreshToken === undefined ? manager.GetPendingClient(clientId) : undefined;
+    if (clientId !== undefined && pending === undefined && !(await manager.isAuthorized(clientId))) {
         returnError(res, 102, `Client ${clientId} is not authorized.`);
         return;
     }
 
     // a classe vem do registro feito na autorizacao, nao do endereco
-    const registered = clientId !== undefined ? await manager.GetAuthorizedClient(clientId) : undefined;
+    const registered = clientId !== undefined ? pending ?? await manager.GetAuthorizedClient(clientId) : undefined;
     const local = registered !== undefined ? registered.isLocal() : true;
 
     // Tabela C.4, 106: nem um registro client:{id} de classe associada recebe credencial
@@ -197,17 +203,18 @@ async function GETToken(req: Request, res: Response): Promise<void> {
         return;
     }
 
-    const valid = await validateTokenParameters(clientId, refreshToken, challengeResponse, local, req.protocol, res);
+    const valid = validateTokenParameters(clientId, refreshToken, challengeResponse, registered, local, req.protocol, res);
     if (!valid) {
         return;
     }
 
     // No challenge-response, o material do pareamento (de onde vem a chave da primeira resposta) ja saiu do
-    // cliente; se a emissao falhar, ele volta e a tentativa segue aberta.
+    // cliente; se a gravacao da autorizacao ou a emissao falhar, ele volta e a tentativa segue aberta.
     const { client, pairing } = valid;
     let encr: Buffer<ArrayBufferLike> | undefined;
     let resp: TokenResponse;
     try {
+        if (pairing) await manager.AuthorizePairedClient(client);
         const [token, expire] = await manager.getClientAccessToken(clientId as string);
         resp = {
             accessToken : token,
@@ -254,8 +261,9 @@ async function GETToken(req: Request, res: Response): Promise<void> {
 // challenge-response, o material do pareamento ja tirado dele.
 type ValidToken = { client: Client; pairing?: PairingMaterial };
 
-async function validateTokenParameters(clientId: string, refreshToken: string, challengeResponse: string, local: boolean, protocol: string, res: Response): Promise<ValidToken | false> {
-    if (clientId === undefined) {
+// Sincrona: da busca da tentativa pendente ate a retirada do material nao ha await.
+function validateTokenParameters(clientId: string, refreshToken: string, challengeResponse: string, registered: Client | undefined, local: boolean, protocol: string, res: Response): ValidToken | false {
+    if (clientId === undefined || registered === undefined) {
         returnError(res, 105, 'Required header clientid not defined.');
         return false;
     }
@@ -264,7 +272,7 @@ async function validateTokenParameters(clientId: string, refreshToken: string, c
         return false;
     }
 
-    const client = await manager.GetAuthorizedClient(clientId);
+    const client = registered;
 
     if (refreshToken !== undefined) {
         if (!local && protocol !== 'https') {

@@ -84,8 +84,12 @@ async function getCurrentUser(): Promise<string> {
     return await readCurrentUser();
 }
 
-// C.6.14.4: o lastAccess do perfil e gravado pela plataforma ao receber aop/currentUser, nao aqui
+// C.6.14.4 (Tabela C.73): 300 sem servico DTV em uso, 305 para id inexistente, 405 sem acesso a emissora
+// do servico corrente. O lastAccess e gravado pela plataforma ao receber aop/currentUser, nao aqui.
 async function setCurrentUser(uuid: string): Promise<void> {
+    const currentService = await readCurrentService();
+    if (!currentService) throw new ApiError(300);
+    await assertUserVisible(uuid, currentService);
     await funcoes.sessaoUsuario(uuid);
     mqttClient.publish(TOPICS.current_user, uuid, true);
 }

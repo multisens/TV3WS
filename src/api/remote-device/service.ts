@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import * as manager from "../../modules/remotedevice-manager/manager";
-import { closeEntryPoint, openEntryPoint } from "../../modules/remotedevice-manager/entry-point";
+import { closeEntryPoint, openLocalEntryPoint, openRemoteDeviceEntryPoint } from "../../modules/remotedevice-manager/entry-point";
 import { ApiError } from "../../util";
 import { Device } from "./types";
 
@@ -23,7 +23,7 @@ type RemoteDevice = ReturnType<typeof manager.getDeviceByHandle> & {};
 // A porta abre antes do registro: a URL gravada e a da porta que de fato escuta. Se o armazenamento
 // falhar, addRemoteDevice fecha o servidor: nao fica porta aberta sem dispositivo.
 async function createWebSocket(body: ReqBody): Promise<Response> {
-  const wsServer = await openEntryPoint();
+  const wsServer = await openRemoteDeviceEntryPoint();
   const uuid = uuidv4();
 
   const device = await manager.addRemoteDevice(body, uuid, wsServer);
@@ -51,7 +51,7 @@ function ensureLocalEntryPoint(device: RemoteDevice): Promise<string> {
   let pending = pendingLocalEntryPoints.get(handle);
   if (!pending) {
     pending = (async () => {
-      const wsServer = await openEntryPoint();
+      const wsServer = await openLocalEntryPoint();
       // descadastrado durante a abertura: fecha o servidor recem-aberto
       if (manager.getDeviceByHandle(handle) !== device) {
         closeEntryPoint(wsServer);

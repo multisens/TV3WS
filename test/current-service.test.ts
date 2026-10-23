@@ -1,5 +1,5 @@
 // GET /tv3/current-service (C.6.3.1, Tabela C.8) pelo app.ts inteiro, com o core real e Redis e MQTT por
-// dubles: "serviceId" inteiro e 300 quando nao ha servico em uso.
+// dubles: 300 quando nao ha servico em uso, "serviceId" omitido sem SLT e o aop/services consumido.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -60,26 +60,41 @@ test('servico em uso sem @serviceId conhecido: 200, sem "serviceId" (nem "-1"/"u
     assert.ok(!('serviceName' in r.json), 'nome vazio e omitido (C.3.2.2)');
 });
 
-test('"serviceId" inteiro quando aop/services traz o @serviceId', async () => {
-    // core.ts indexa aop/services pelo valor de aop/currentService
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const core = require('../src/core').default;
+
+test('aop/services: a lista dos servicos anunciados pelo serviceContextId; o servico em uso segue sem "serviceId" e "serviceName"', async () => {
     await mqtt.deliver(TOPICS.current_service, '');
-    await mqtt.deliver(TOPICS.services, JSON.stringify([
-        { serviceId: 101, serviceName: 'Servico Zero', serviceIcon: '', initialMediaURL: '' },
-        { serviceId: '202', serviceName: 'Servico Um', serviceIcon: '', initialMediaURL: '' },
-    ]));
-    await mqtt.deliver(TOPICS.current_service, '0');
-    let r = await get({ 'X-TV30-API-Version': '100.0' });
+    await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceContextId: 'urn:tv30:service:outro' }]));
+    assert.deepEqual(core.services, [{ serviceContextId: SVC }, { serviceContextId: 'urn:tv30:service:outro' }]);
+    await mqtt.deliver(TOPICS.current_service, SVC);
+    const r = await get({ 'X-TV30-API-Version': '100.0' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.apiVersion, '100.0');
-    assert.equal(r.json.serviceId, 101);
-    assert.equal(typeof r.json.serviceId, 'number');
-    assert.equal(r.json.serviceName, 'Servico Zero');
+    assert.equal(r.json.serviceContextId, SVC);
+    assert.ok(!('serviceId' in r.json) && !('serviceName' in r.json), JSON.stringify(r.json));
 
-    // em texto so de digitos no JSON publicado -> numero na resposta
-    await mqtt.deliver(TOPICS.current_service, '1');
-    r = await get();
-    assert.equal(r.json.serviceId, 202);
-    assert.equal(typeof r.json.serviceId, 'number');
+    // mensagem vazia (retido apagado): nenhum servico; item fora do formato fica de fora
+    await mqtt.deliver(TOPICS.services, '');
+    assert.deepEqual(core.services, []);
+    await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceId: 7 }, 'x', null]));
+    assert.deepEqual(core.services, [{ serviceContextId: SVC }]);
+    // JSON invalido: loga e mantem a lista
+    const [errorOrig, logOrig] = [console.error, console.log];
+    console.error = console.log = () => undefined;
+    try {
+        await mqtt.deliver(TOPICS.services, 'nao e json');
+    } finally { [console.error, console.log] = [errorOrig, logOrig]; }
+    assert.deepEqual(core.services, [{ serviceContextId: SVC }]);
+    await mqtt.deliver(TOPICS.current_service, '');
+});
+
+test('integerServiceId (Tabela C.8): inteiro >= 0, em numero ou texto so de digitos; o resto sem valor', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { integerServiceId } = require('../src/util/service-id');
+    for (const [v, want] of [[101, 101], ['202', 202], ['007', 7], [0, 0], [-1, undefined], [1.5, undefined], ['abc', undefined], ['', undefined], [undefined, undefined], [null, undefined]] as [unknown, number | undefined][]) {
+        assert.equal(integerServiceId(v), want, JSON.stringify(v));
+    }
 });
 
 test('a plataforma desfaz a selecao (aop/currentService vazio): volta o 300', async () => {
@@ -91,23 +106,21 @@ test('a plataforma desfaz a selecao (aop/currentService vazio): volta o 300', as
     assert.equal(r.json.error, 300, JSON.stringify(r.json));
 });
 
-test('session:current-service pela funcao: cinco campos, serviceId inteiro ou vazio', async () => {
+test('session:current-service pela funcao: cinco campos, serviceId e serviceName vazios (sem SLT)', async () => {
     const tick = () => new Promise(r => setImmediate(r));
     await mqtt.deliver(TOPICS.current_service, '');
-    await mqtt.deliver(TOPICS.services, JSON.stringify([
-        { serviceId: 101, serviceName: 'Zero' }, { serviceId: '007', serviceName: 'Um' },
-        { serviceId: -1, serviceName: 'Dois' }, { serviceId: 'abc', serviceName: 'Tres' }, { serviceId: 1.5, serviceName: 'Quatro' },
-    ]));
-    const esperado = ['101', '7', '', '', ''];
-    for (let i = 0; i < esperado.length; i++) {
+    await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceContextId: 'urn:tv30:service:outro' }]));
+    for (const sid of [SVC, 'urn:tv30:service:outro', 'urn:tv30:service:fora-da-lista']) {
         fake.fcalls.length = 0;
-        await mqtt.deliver(TOPICS.current_service, String(i));
+        await mqtt.deliver(TOPICS.current_service, sid);
         await tick();
         const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_sessao_servico');
-        assert.equal(chamadas.length, 1, `uma chamada para o servico ${i}`);
+        assert.equal(chamadas.length, 1, `uma chamada para o servico ${sid}`);
         const h = fake.store.get('session:current-service') as Record<string, string>;
         assert.deepEqual(Object.keys(h).sort(), ['originalNetworkId', 'serviceContextId', 'serviceId', 'serviceName', 'transportStreamId']);
-        assert.equal(h.serviceId, esperado[i], `serviceId do servico ${i}`);
+        assert.equal(h.serviceContextId, sid);
+        assert.equal(h.serviceId, '', `serviceId de ${sid}`);
+        assert.equal(h.serviceName, '', `serviceName de ${sid}`);
     }
     // a funcao recusa (dado fora do esquema): o handler loga e segue de pe
     const logs: string[] = [];

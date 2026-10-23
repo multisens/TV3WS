@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import service from "./service";
 import { returnError } from "../../util";
+import { Device } from "./types";
 
 async function POSTRemoteDevice(req: Request, res: Response): Promise<void> {
   const body = req.body;
@@ -39,17 +40,7 @@ async function DELETERemoteDevice(req: Request, res: Response): Promise<void> {
   res.status(204).json({});
 }
 
-// abrir o ponto de entrada e assincrono: porta ocupada -> outra porta; esgotadas, 404 {error:200}
-async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
-  const classId = req.params["classId"];
-  if (!classId) {
-    returnError(res, 105, "classId");
-    return;
-  }
-  // 2.0: a listagem ja traz a url. 100.0: so handles; a url vem por GET /device/{handle}.
-  const devices = res.locals.apiVersion === '100.0'
-    ? service.getRemoteDevices(classId)
-    : await service.getRemoteDevicesWithUrl(classId);
+function sendDevices(res: Response, devices: Device[] | undefined): void {
   if (!devices || devices.length === 0) {
     res.status(200).json({});
     return;
@@ -59,19 +50,28 @@ async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
   });
 }
 
-// Rotas por handle: extensao do testbed, fora da Tabela C.2, so na versao 100.0. A borda ja responde 100
-// nas outras versoes; esta conferencia e para quem chega sem passar por ela.
-function handleRoutesAreV100(req: Request, res: Response): boolean {
-  if (res.locals.apiVersion !== '100.0') {
-    returnError(res, 100, `${req.method} ${req.originalUrl} exists only with Accept-Version: 100.0`);
-    return false;
+// 2.0: a listagem ja traz a url. Abrir o ponto de entrada e assincrono: porta ocupada -> outra porta;
+// esgotadas, 404 {error:200}
+async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
+  const classId = req.params["classId"];
+  if (!classId) {
+    returnError(res, 105, "classId");
+    return;
   }
-  return true;
+  sendDevices(res, await service.getRemoteDevicesWithUrl(classId));
+}
+
+// 100.0: so handles; a url vem por GET /device/{handle}
+function GETRemoteDeviceHandles(req: Request, res: Response): void {
+  const classId = req.params["classId"];
+  if (!classId) {
+    returnError(res, 105, "classId");
+    return;
+  }
+  sendDevices(res, service.getRemoteDevices(classId));
 }
 
 async function GETRemoteDeviceEntryPoint(req: Request, res: Response): Promise<void> {
-  if (!handleRoutesAreV100(req, res)) return;
-
   const handle = req.params.handle;
   if (!handle) {
     returnError(res, 105, "handle");
@@ -87,8 +87,6 @@ async function GETRemoteDeviceEntryPoint(req: Request, res: Response): Promise<v
 }
 
 function DELETERemoteDeviceEntryPoint(req: Request, res: Response): void {
-  if (!handleRoutesAreV100(req, res)) return;
-
   const handle = req.params.handle;
   if (!handle) {
     returnError(res, 105, "handle");
@@ -101,4 +99,4 @@ function DELETERemoteDeviceEntryPoint(req: Request, res: Response): void {
   res.status(204).json({});
 }
 
-export default { POSTRemoteDevice, DELETERemoteDevice, GETRemoteDevices, GETRemoteDeviceEntryPoint, DELETERemoteDeviceEntryPoint };
+export default { POSTRemoteDevice, DELETERemoteDevice, GETRemoteDevices, GETRemoteDeviceHandles, GETRemoteDeviceEntryPoint, DELETERemoteDeviceEntryPoint };

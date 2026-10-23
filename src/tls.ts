@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 
 // Certificado autoassinado do receptor (C.4.1.1 permite), o mesmo da borda: HTTPS, serverCert do
-// pareamento (Tabela C.4) e wss:// dos pontos de entrada (Tabelas C.76 e C.80). Fonte: TV30_TLS_DIR
-// (key.pem, cert.pem), senao HTTPS_KEY/HTTPS_CERT em base64; sem nenhum, so HTTP e ws://.
+// pareamento (Tabela C.4) e wss:// do ponto de entrada do dispositivo remoto (Tabela C.76). Fonte:
+// TV30_TLS_DIR (key.pem, cert.pem), senao HTTPS_KEY/HTTPS_CERT em base64; sem nenhum, so HTTP e ws://.
 export type TlsMaterial = { key: Buffer; cert: Buffer; source: string };
 
 export function loadTls(env: NodeJS.ProcessEnv = process.env): TlsMaterial | undefined {
@@ -35,7 +35,8 @@ export function serverCert(): string | undefined {
     return t ? t.cert.toString('base64') : undefined;
 }
 
-// TV3WS_WS_TLS=false forca ws://: navegador nao abre wss:// com certificado autoassinado em que nao confia.
+// TLS do ponto de entrada do dispositivo remoto. TV3WS_WS_TLS=false o abre em ws://, para demonstracao com
+// aparelho que nao confia no certificado autoassinado. O ponto de entrada local sai sempre em ws://.
 export function wsTls(env: NodeJS.ProcessEnv = process.env): boolean {
     const off = ['false', '0'].includes((env.TV3WS_WS_TLS ?? '').trim().toLowerCase());
     return !off && tlsMaterial() !== undefined;

@@ -210,35 +210,59 @@ test('103 com o QR code de A na tela: B (nao local ou local) recebe 103 na hora,
     assert.deepEqual(on(PIN, from), [k.opened, CLOSE]);
 });
 
-test('103 com o PIN de A na tela; o reuso do clientid de A segue dando 101 (o 101 vem antes do 103)', async () => {
-    const a = await authorize('kex');
+test('103 com o PIN de B na tela; o reuso do clientid de A, pareado, segue dando 101 (o 101 vem antes do 103)', async () => {
+    const a = await authorize('qrcode');
+    assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
+    const b = await authorize('kex');
     const from = published.length;
     expectError(await authorizeRaw(novoNaoLocal()), 103);
     expectError(await authorizeRaw({ clientid: a.cid, 'display-name': 'teste-camada', pm: 'qrcode' }), 101);
     assert.deepEqual(on(`${YESNO}/message`, from), []);
-    assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
+    assert.equal((await token(b.cid, challengeResponse(b))).status, 200);
     assert.deepEqual(on(PIN, from), [CLOSE]);
     assert.equal(_camadaParaTestes.ocupacao(), undefined, 'camada livre depois do sucesso');
 });
 
-test('emissao da credencial falha depois do desafio conferido: sem fechamento (pareamento nao concluido)', async () => {
-    const p = await authorize('qrcode');
+test('PIN de A na tela: novo /tv3/authorize de A descarta a tentativa pendente e recebe 103, sem sim/nao; o desafio anterior da 102', async () => {
+    const a = await authorize('kex');
     const from = published.length;
-    const msg = 'TV30ESQUEMA tv30_cliente_grava: recusa de teste';
-    fake.recusar('tv30_cliente_grava', msg);
-    const errorOrig = console.error;
-    console.error = () => undefined;
-    try {
-        expectError(await token(p.cid, challengeResponse(p)), 200);
-    } finally {
-        fake.recusar('tv30_cliente_grava');
-        console.error = errorOrig;
-    }
-    assert.deepEqual(on(QR, from), [], 'a credencial nao saiu: o pop-up fica');
-    // a tentativa segue aberta: o sucesso fecha
-    assert.equal((await token(p.cid, challengeResponse(p))).status, 200);
-    assert.deepEqual(on(QR, from), [CLOSE]);
+    expectError(await authorizeRaw({ clientid: a.cid, 'display-name': 'teste-camada', pm: 'qrcode' }), 103);
+    assert.deepEqual(on(`${YESNO}/message`, from), []);
+    expectError(await token(a.cid, challengeResponse(a)), 102);
 });
+
+test('depois da trava, novo /tv3/authorize de A sem pareamento concluido abre o sim/nao e um QR code novo; o desafio anterior da 102', async () => {
+    let agora = Date.now();
+    _camadaParaTestes.relogio(() => agora);
+    const a = await authorize('qrcode');
+    agora += PAIRING_POPUP_TIMEOUT_MS;
+    const from = published.length;
+    const r = await authorizeRaw({ clientid: a.cid, 'display-name': 'teste-camada', pm: 'qrcode' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(on(`${YESNO}/message`, from).length, 1, 'o sim/nao de novo');
+    assert.equal(on(QR, from).length, 1, 'um QR code novo');
+    expectError(await token(a.cid, challengeResponse(a)), 102);
+});
+
+for (const funcao of ['tv30_cliente_autoriza', 'tv30_cliente_grava']) {
+    test(`${funcao} recusada no /tv3/token depois do desafio conferido: sem fechamento (pareamento nao concluido)`, async () => {
+        const p = await authorize('qrcode');
+        const from = published.length;
+        fake.recusar(funcao, `TV30ESQUEMA ${funcao}: recusa de teste`);
+        const errorOrig = console.error;
+        console.error = () => undefined;
+        try {
+            expectError(await token(p.cid, challengeResponse(p)), 200);
+        } finally {
+            fake.recusar(funcao);
+            console.error = errorOrig;
+        }
+        assert.deepEqual(on(QR, from), [], 'a credencial nao saiu: o pop-up fica');
+        // a tentativa segue aberta: o sucesso fecha
+        assert.equal((await token(p.cid, challengeResponse(p))).status, 200);
+        assert.deepEqual(on(QR, from), [CLOSE]);
+    });
+}
 
 test('103 com o sim/nao de um pedido esperando resposta: outro cliente e o MESMO clientid recebem 103; o primeiro recebe a resposta do espectador', async () => {
     respostaSimNao = null;

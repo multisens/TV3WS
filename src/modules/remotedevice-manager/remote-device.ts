@@ -14,8 +14,7 @@ import {
 } from "./types";
 import { WebSocket, WebSocketServer } from "ws";
 import { removeRemoteDevice } from "./manager";
-import { closeEntryPoint } from "./entry-point";
-import { wsTls } from "../../tls";
+import { closeEntryPoint, entryPointUrl } from "./entry-point";
 
 enum InterfaceType {
   area = "area",
@@ -308,15 +307,16 @@ export default class RemoteDevice {
     return this.supportedTypes;
   }
 
-  // wss:// nas respostas das Tabelas C.76 e C.80 quando o ponto de entrada tem TLS
+  // url da Tabela C.76: wss:// quando o ponto de entrada do dispositivo tem TLS
   public getUrl(): string {
     if (!this.wss) return "";
-    return `${wsTls() ? "wss" : "ws"}://${core.server.url}:${this.wss.options.port}`;
+    return entryPointUrl(this.wss, core.server.url);
   }
 
+  // url da Tabela C.80 e da ativacao por handle: ws://
   public getLocalEntryPointUrl(): string {
     if (!this.lwss) return "";
-    return `${wsTls() ? "wss" : "ws"}://${core.server.url}:${this.lwss.options.port}`;
+    return entryPointUrl(this.lwss, core.server.url);
   }
 
   public getCapabilities(): DeviceCapabilities[] {

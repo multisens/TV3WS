@@ -74,6 +74,18 @@ test('JSON malformado no corpo (101 do errorHandler) tambem leva API-Version', a
     expectError(await call('/tv3/remote-device', init('100.0')), 101, '100.0');
 });
 
+test('extensao do testbed no caminho /v100.0: o tratador da 100.0 responde, com o API-Version da borda', async () => {
+    const r = await call('/v100.0/tv3/remote-device/devices/x', decided('100.0'));
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.apiVersion, '100.0');
+    assert.deepEqual(r.json, {});
+    expectError(await call('/v100.0/tv3/remote-device/device/x', decided('100.0')), 101, '100.0');   // handle inexistente
+    // a rota por handle so existe sob /v100.0; caminho sem tratador, 100 no formato C.3.2
+    expectError(await call('/tv3/remote-device/device/x', decided('100.0')), 100, '100.0');
+    expectError(await call('/v100.0/tv3/rota-que-nao-existe', decided('100.0')), 100, '100.0');
+    expectError(await call('/v100.0/tv3/remote-device/devices/x', { method: 'DELETE', ...decided('100.0') }), 100, '100.0');
+});
+
 test('resposta de sucesso: API-Version = a versao negociada pela borda', async () => {
     await mqtt.deliver(TOPICS.current_service, 'urn:tv30:service:teste');
     const r = await call('/tv3/current-service', decided('100.0'));

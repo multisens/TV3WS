@@ -1,6 +1,7 @@
 // GET /tv3/authorize e GET /tv3/token (C.6.1.2, C.6.1.3): router real sobre um Express minimo, Redis e core
 // por dubles (pop-up respondido pelo duble). Clientid ja usado da 101 sem nova consulta (Tabela C.3;
-// C.6.1.4.4), clients:authorized x clients:blocked, Redis fora, PIN de 4 digitos, vazio = ausente, challenge unico.
+// C.6.1.4.4), clients:authorized x clients:blocked, Redis fora, PIN de 4 digitos, vazio = ausente, challenge unico,
+// sim do nao local gravado so no /tv3/token que confere o desafio (C.4.2.3).
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -138,20 +139,6 @@ test('quem perdeu o refresh token autoriza de novo com clientid novo (nova consu
     assert.equal(await popUpsDuring(async () => { fresh = await authorize(randomUUID()); }), 1);
     assert.equal(fresh!.status, 200);
     assert.equal(typeof fresh!.json.refreshToken, 'string');
-});
-
-test('nao local (pm=qrcode): reuso do clientid da 101 sem pop-up', async () => {
-    viewerAnswer = true;
-    const cid = randomUUID();
-    const first = await authorize(cid, { pm: 'qrcode' });
-    assert.equal(first.status, 200, JSON.stringify(first.json));
-    assert.equal(typeof first.json.challenge, 'string');
-
-    let again: Awaited<ReturnType<typeof authorize>> | undefined;
-    assert.equal(await popUpsDuring(async () => { again = await authorize(cid, { pm: 'qrcode' }); }), 0);
-    expectError(again!, 101);
-    // trocar a classe no reuso (sem pm) tambem da 101
-    expectError(await authorize(cid), 101);
 });
 
 // o tv3ws nunca emite credencial de classe associada
@@ -376,9 +363,8 @@ type NonLocal = { cid: string; secret: Buffer; cr: string; plain: Buffer };
 
 // /tv3/authorize de cliente nao local e a solucao do desafio (Tabela C.4),
 // sem chamar o /tv3/token
-async function pairNonLocal(pm: 'qrcode' | 'kex'): Promise<NonLocal> {
+async function pairNonLocal(pm: 'qrcode' | 'kex', cid: string = randomUUID()): Promise<NonLocal> {
     viewerAnswer = true;
-    const cid = randomUUID();
     const ecdh = createECDH('prime256v1');
     const extra: Record<string, string> = { pm };
     if (pm === 'kex') {
@@ -395,6 +381,96 @@ async function pairNonLocal(pm: 'qrcode' | 'kex'): Promise<NonLocal> {
 }
 const tokenByChallenge = (p: NonLocal, headers: Record<string, string> = {}) =>
     getRaw('/token', `clientid=${p.cid}&challenge-response=${p.cr}`, headers);
+const notStored = (cid: string) => {
+    assert.equal(store.has(`client:${cid}`), false, `client:${cid} gravado`);
+    assert.ok(!members('clients:authorized').includes(cid), `${cid} em clients:authorized`);
+};
+
+// --- sim do nao local: so em memoria ate o challenge-response conferido (C.4.2.3) -------
+for (const pm of ['qrcode', 'kex'] as const) {
+    test(`pm=${pm}: o sim sem pareamento concluido nao grava nada; o mesmo clientid ve o pop-up de novo e so o desafio novo conclui`, async () => {
+        fake.fcalls.length = 0;
+        const p = await pairNonLocal(pm);
+        assert.deepEqual(fake.fcalls.map(c => c[0]), [], 'nenhuma gravacao no sim do nao local');
+        notStored(p.cid);
+        // o refresh-token exige a autorizacao gravada
+        expectError(await getRaw('/token', `clientid=${p.cid}&refresh-token=x`, HTTPS), 102);
+
+        // camada livre, como no fim da trava: a tentativa pendente nao da 101
+        _camadaParaTestes.limpar();
+        let p2: NonLocal | undefined;
+        assert.equal(await popUpsDuring(async () => { p2 = await pairNonLocal(pm, p.cid); }), 1);
+        notStored(p.cid);
+        // a tentativa anterior foi descartada
+        expectError(await tokenByChallenge(p), 102);
+
+        const ok = await tokenByChallenge(p2!);
+        assert.equal(ok.status, 200);
+        assert.equal(typeof JSON.parse(aes(false, p2!.secret, ok.raw).toString('utf8')).accessToken, 'string');
+        assert.ok(members('clients:authorized').includes(p.cid));
+        assert.equal((store.get(`client:${p.cid}`) as Record<string, string>).class, 'non-local');
+        const autoriza = fake.fcalls.filter(c => c[0] === 'tv30_cliente_autoriza');
+        assert.equal(autoriza.length, 1);
+        assert.deepEqual(autoriza[0].slice(1, 4), [p.cid, 'class', 'non-local']);
+    });
+
+    test(`pm=${pm}: pareamento concluido: reuso do clientid da 101 sem pop-up, com ou sem pm`, async () => {
+        const p = await pairNonLocal(pm);
+        assert.equal((await tokenByChallenge(p)).status, 200);
+        for (const extra of [{ pm: 'qrcode' }, { pm: 'kex', key: 'x' }, {}] as Record<string, string>[]) {
+            assert.equal(await popUpsDuring(async () => expectError(await authorize(p.cid, extra), 101)), 0, JSON.stringify(extra));
+        }
+    });
+}
+
+test('nao local: a recusa no pop-up grava clients:blocked na hora; o reuso da 101 sem pop-up, com ou sem pm', async () => {
+    viewerAnswer = false;
+    const cid = randomUUID();
+    const qr = qrKeys.length;
+    expectError(await authorize(cid, { pm: 'qrcode' }), 102);
+    assert.equal(qrKeys.length, qr, 'sem pop-up de pareamento');
+    assert.ok(members('clients:blocked').includes(cid));
+    assert.ok(!members('clients:authorized').includes(cid));
+    viewerAnswer = true;
+    for (const extra of [{ pm: 'qrcode' }, { pm: 'kex', key: 'x' }, {}] as Record<string, string>[]) {
+        assert.equal(await popUpsDuring(async () => expectError(await authorize(cid, extra), 101)), 0, JSON.stringify(extra));
+    }
+});
+
+test('nao local com tentativa pendente: o novo pedido recusado no pop-up bloqueia, e o desafio anterior da 102', async () => {
+    const p = await pairNonLocal('qrcode');
+    _camadaParaTestes.limpar();
+    viewerAnswer = false;
+    expectError(await authorize(p.cid, { pm: 'qrcode' }), 102);
+    viewerAnswer = true;
+    assert.ok(members('clients:blocked').includes(p.cid));
+    expectError(await tokenByChallenge(p), 102);
+    notStored(p.cid);
+});
+
+test('gravacao da autorizacao recusada no /tv3/token: 404 {error:200} sem credencial e sem registro; o material volta e o mesmo challenge-response conclui', async () => {
+    const p = await pairNonLocal('kex');
+    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: recusa de teste';
+    fake.recusar('tv30_cliente_autoriza', msg);
+    const errorOrig = console.error;
+    console.error = () => undefined;
+    try {
+        const r = await tokenByChallenge(p);
+        expectError(r, 200);
+        assert.equal(r.json.accessToken, undefined);
+        assert.ok(r.json.description.includes(msg), r.json.description);
+    } finally {
+        fake.recusar('tv30_cliente_autoriza');
+        console.error = errorOrig;
+    }
+    notStored(p.cid);
+    assert.equal(manager.GetPendingClient(p.cid)?.hasPendingChallenge(), true);
+
+    const ok = await tokenByChallenge(p);
+    assert.equal(ok.status, 200);
+    assert.ok(members('clients:authorized').includes(p.cid));
+    expectError(await tokenByChallenge(p), 102);
+});
 
 test('refresh-token vazio ou so espacos: 105 sem credencial; o refresh token legitimo segue valendo', async () => {
     viewerAnswer = true;
@@ -657,8 +733,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
             }
         }
         // o pareamento segue aberto: a solucao certa conclui (uma vez)
-        const client = await manager.GetAuthorizedClient(p.cid);
-        assert.equal(client.hasPendingChallenge(), true);
+        assert.equal(manager.GetPendingClient(p.cid)?.hasPendingChallenge(), true);
         const ok = await tokenByChallenge(p);
         assert.equal(ok.status, 200);
         assert.equal(typeof JSON.parse(aes(false, p.secret, ok.raw).toString('utf8')).accessToken, 'string');
