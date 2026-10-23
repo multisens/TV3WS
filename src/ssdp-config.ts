@@ -1,8 +1,9 @@
 import { getLocalIP } from './util/networking';
 
-// Endereco que o /manifest divulga (C.3.4). As portas sao as da borda (44642, fixa pela norma, e 44643),
-// nao HTTP_PORT/HTTPS_PORT do tv3ws, que nao sao publicadas. O host daqui so vale como sobreposicao
-// (SSDP_ADVERTISE_HOST) ou ultimo recurso; o normal e o da requisicao (src/manifest.ts).
+// Address the /manifest announces (C.3.4). The ports are those of the edge
+// (44642, fixed by the standard, and 44643), not HTTP_PORT/HTTPS_PORT of
+// tv3ws. The host here is only an override (SSDP_ADVERTISE_HOST) or a last
+// resort; normally it comes from the request (src/manifest.ts).
 
 export const SSDP_ST = 'urn:schemas-sbtvd-org:service:TV3.0WebServices:1';
 
@@ -16,9 +17,9 @@ export type AdvertisedEndpoint = {
     httpsPort: number;
 };
 
-// Host "puro" a partir do valor configurado: tira esquema, caminho e porta
-// ("http://192.168.1.150:44642/x" -> "192.168.1.150"); IPv6 sai entre
-// colchetes, como o formato <ip_or_hostname>:<port> exige.
+// Bare host from the configured value: removes scheme, path and port
+// ("http://192.168.1.150:44642/x" becomes "192.168.1.150"); an IPv6 address
+// comes out in brackets, as the <ip_or_hostname>:<port> format requires.
 export function normalizeHost(raw: string | undefined): string {
     let h = (raw ?? '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
     h = h.split('/')[0];
@@ -41,7 +42,8 @@ export function parsePort(name: string, raw: string | undefined, fallback: numbe
     return n;
 }
 
-// <host> = SSDP_ADVERTISE_HOST, senao SERVER_URL, senao o IP local. Porta invalida lanca Error.
+// <host> = SSDP_ADVERTISE_HOST, otherwise SERVER_URL, otherwise the local IP.
+// An invalid port throws an Error.
 export function resolveAdvertisedEndpoint(
     env: NodeJS.ProcessEnv = process.env,
     localIP: () => string = getLocalIP,
@@ -68,11 +70,12 @@ export function isLoopbackHost(host: string): boolean {
         || h === '::1' || h === '0:0:0:0:0:0:0:1';
 }
 
-// Avisos registrados no boot; nao mudam o que e anunciado.
+// Warnings logged at startup; they do not change what is announced.
 export function advertiseWarnings(e: AdvertisedEndpoint): string[] {
     const out: string[] = [];
     if (e.source === 'SSDP_ADVERTISE_HOST' && isLoopbackHost(e.host)) {
-        // so a sobreposicao fixa o host; sem ela, o host sai da requisicao
+        // Only the override fixes the host; without it, the host comes from the
+        // request.
         out.push(`host anunciado '${e.host}' (via ${e.source}) e de loopback: um cliente em outro `
             + 'equipamento recebe o anuncio mas nao alcanca o LOCATION nem o Server-BaseURL (C.3.4). '
             + 'Defina SSDP_ADVERTISE_HOST com o IP ou nome do equipamento na rede (no compose: .env da raiz '

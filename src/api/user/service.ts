@@ -10,7 +10,7 @@ import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
 
-// Sessao lida do Redis a cada chamada, para valer mesmo se alterada por fora.
+// The session is read from Redis on every call.
 
 const KEY_CURRENT_USER    = 'session:current-user';
 const KEY_CURRENT_SERVICE = 'session:current-service-id';
@@ -23,8 +23,8 @@ async function readCurrentService(): Promise<string> {
     return (await redis.get(KEY_CURRENT_SERVICE)) ?? '';
 }
 
-// Servico ativo so se algum perfil tiver consent para ele: um aop/currentService retido no broker, sem
-// consent de ninguem, esconderia todos os perfis e travaria o profile-chooser do AoP.
+// The current service, or '' if users:index is not empty and no profile is
+// visible to it (user:{id}:consent).
 async function resolveActiveService(): Promise<string> {
     const currentService = await readCurrentService();
     if (!currentService) return '';
@@ -41,8 +41,8 @@ async function resolveActiveService(): Promise<string> {
 }
 
 
-// Os perfis (users:index, user:{id}, user:{id}:consent) sao da plataforma (gestor de perfis do AoP); aqui
-// so se le. A sessao espelha os topicos; valor fora do esquema e recusado, e o handler MQTT loga.
+// The session mirrors the topics; a value outside the schema is refused, and
+// the MQTT handler logs it.
 async function updateCurrentUser(m: string): Promise<void> {
     await funcoes.sessaoUsuario(m);
 }
@@ -84,8 +84,8 @@ async function getCurrentUser(): Promise<string> {
     return await readCurrentUser();
 }
 
-// C.6.14.4 (Tabela C.73): 300 sem servico DTV em uso, 305 para id inexistente, 405 sem acesso a emissora
-// do servico corrente. O lastAccess e gravado pela plataforma ao receber aop/currentUser, nao aqui.
+// C.6.14.4 (Table C.73): 300 without a DTV service in use, 305 for a
+// nonexistent id, 405 for a profile not visible to the current service.
 async function setCurrentUser(uuid: string): Promise<void> {
     const currentService = await readCurrentService();
     if (!currentService) throw new ApiError(300);
@@ -95,7 +95,8 @@ async function setCurrentUser(uuid: string): Promise<void> {
 }
 
 async function getUserList(body: Expression): Promise<UsersIdList> {
-    // C.6.14.1: a restricao de divulgacao vale sempre; sem servico DTV em uso, 300
+    // C.6.14.1: only the profiles visible to the service; without a DTV
+    // service in use, 300.
     const currentService = await resolveActiveService();
     if (!currentService) throw new ApiError(300);
 
@@ -110,7 +111,7 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
         return consent.includes(currentService);
     });
 
-    // corpo opcional (C.6.14.1): ausente ou {} devolve todos os elegiveis
+    // Optional body (C.6.14.1): absent or {} returns every eligible profile.
     if (!body || Object.keys(body).length === 0 || eligibleIds.length === 0) {
         return { users: eligibleIds.map(id => ({ id })) };
     }
@@ -126,15 +127,16 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
             return matchExpression(fields, body);
         });
     } catch {
-        // expressao malformada no corpo (C.6.14.1 -> erro 101)
+        // Malformed expression in the body (C.6.14.1): error 101.
         throw new ApiError(101, 'invalid query expression in message body');
     }
 
     return { users: matched.map(id => ({ id })) };
 }
 
-// Resolve o contexto de servico de uma chamada: o alias current-service usa
-// o servico ativo (erro 300 se nao houver); um scid explicito vale por si.
+// Resolves the service context of a call: the current-service alias uses
+// the active service (error 300 if there is none); an explicit scid stands
+// for itself.
 async function resolveScid(scidParam?: string): Promise<string> {
     if (scidParam && scidParam !== 'current-service') return scidParam;
     const current = await resolveActiveService();
@@ -142,8 +144,8 @@ async function resolveScid(scidParam?: string): Promise<string> {
     return current;
 }
 
-// Garantias comuns de C.6.14.2/C.6.14.5: o usuario existe (305) e concedeu
-// acesso ao broadcaster do servico informado (405).
+// Common checks of C.6.14.2 and C.6.14.5: the user exists (305) and the
+// profile is visible to the given service (405).
 async function assertUserVisible(uuid: string, scid: string): Promise<void> {
     const exists = await redis.sismember('users:index', uuid);
     if (!exists) throw new ApiError(305, `user ${uuid} does not exist`);
@@ -156,8 +158,9 @@ export type AttributeResult =
     | { kind: 'text'; value: string }
     | { kind: 'json'; attrs: Record<string, string> };
 
-// C.6.14.2: atributo na query (a chave e o nome; aceita tambem ?attribute=<nome>) -> valor em texto puro;
-// sem atributo -> JSON com os basicos e os de emissora do contexto informado.
+// C.6.14.2: an attribute in the query (the key is the name; also
+// ?attribute=<name>) gives its value as plain text; without one, JSON with
+// the basic attributes and the broadcaster ones of the given context.
 async function getUserAttributes(uuid: string, scidParam: string | undefined, query: Record<string, unknown>): Promise<AttributeResult> {
     const scid = await resolveScid(scidParam);
     await assertUserVisible(uuid, scid);
@@ -184,9 +187,11 @@ async function getUserAttributes(uuid: string, scidParam: string | undefined, qu
     return { kind: 'json', attrs: { ...basics, ...broadcaster } };
 }
 
-// C.6.14.6: o arquivo e o avatar de um perfil que deu acesso ao servico ('granted')? So de perfis sem
-// acesso: 'no-consent' (405, Tabela C.75); de nenhum perfil: 'no-owner' (305). O servico conferido e o
-// corrente (session:current-service-id), nao o <service-context-id> da URL.
+// C.6.14.6: whether the file is the avatar of a profile visible to the
+// service ('granted'); only of profiles not visible: 'no-consent' (405,
+// Table C.75); of no profile: 'no-owner' (305). The service checked is the
+// current one (session:current-service-id), not the <service-context-id> of
+// the URL.
 export type AvatarAccess = 'granted' | 'no-consent' | 'no-owner';
 
 async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
@@ -213,14 +218,15 @@ async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
 }
 
 
-// Basicos que a norma proibe redefinir no contexto de um broadcaster.
+// Basic attributes a broadcaster may not redefine.
 const PROTECTED_BASICS = ['id', 'nickname', 'parentalControl', 'maxContentRating'];
 
-// quota da area privativa por perfil x contexto de servico (10.3.3: ate 20 MB por combinacao)
+// Quota of the private area per profile and service context (10.3.3: up to
+// 20 MB).
 const PRIVATE_AREA_QUOTA_BYTES = 20 * 1024 * 1024;
 
-// C.6.14.5: escreve/cria atributos de emissora; valor '' remove o atributo.
-// Devolve o conjunto alterado (a resposta da API e esse JSON).
+// C.6.14.5: writes or creates broadcaster attributes; the value '' removes
+// the attribute. Returns the changed set (the JSON of the API response).
 async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined, attrs: Record<string, unknown>): Promise<Record<string, string>> {
     const scid = await resolveScid(scidParam);
     await assertUserVisible(uuid, scid);
@@ -245,8 +251,8 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
         if (val === '') toDel.push(k); else toSet[k] = val;
     }
 
-    // mede o hash resultante antes de gravar, para responder com a mensagem da quota; a funcao do Redis
-    // confere o mesmo teto de novo, ja de forma atomica
+    // Measures the resulting hash before writing, to answer with the quota
+    // message; the Redis function checks the same limit again, atomically.
     const current = await redis.hgetall(key);
     const merged: Record<string, string> = { ...current, ...toSet };
     toDel.forEach(k => delete merged[k]);
@@ -255,11 +261,12 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
         throw new ApiError(200, `private data quota (20 MB) exceeded for this profile and service context`);
     }
 
-    // HDEL dos vazios e HSET dos demais numa funcao so, que confere o esquema. A familia tem dois
-    // escritores: o tv3ws grava o conteudo; o AoP a remove junto com o perfil (tv30_perfil_remove).
+    // HDEL of the empty values and HSET of the others in a single function,
+    // which checks the schema.
     await funcoes.atributosEmissora(uuid, scid, changed);
 
-    // avisa o espectador so depois de gravar e se algum valor mudou; gravacao com erro nao avisa
+    // Notifies the viewer only after writing and if a value changed; a failed
+    // write does not notify.
     if (attributesChanged(current, toSet, toDel)) {
         await notifyUserOfWrite(uuid, scid);
     }
@@ -267,20 +274,22 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
 }
 
 
-// Tabela C.74, "Restrictions": "it is necessary to notify the user that the application wants to
-// change/add the attribute". Aviso informativo depois de gravar, sem confirmacao; nao retido, para um
-// aviso velho nao voltar quando a pagina da TV reconecta.
+// Table C.74, "Restrictions": "it is necessary to notify the user that the
+// application wants to change/add the attribute". An informative notice
+// after writing, without confirmation; not retained, so that an old notice
+// does not come back when the TV page reconnects.
 export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
 export const INFO_POPUP_TIMEOUT_MS = 5000;
 
-// O estado anterior e o HGETALL da quota, que nao e atomico com a gravacao: uma escrita concorrente no meio
-// pode mudar o resultado.
+// The previous state is the HGETALL of the quota check, which is not atomic
+// with the write: a concurrent write in between may change the result.
 function attributesChanged(before: Record<string, string>, toSet: Record<string, string>, toDel: string[]): boolean {
     return Object.entries(toSet).some(([k, v]) => before[k] !== v) || toDel.some(k => k in before);
 }
 
-// <servico> e o serviceName do servico corrente se a gravacao for nele e o nome existir; senao, o id do
-// servico. Falha no aviso so vai para o log: os atributos ja foram gravados.
+// <service> is the serviceName of the current service if the write is on it
+// and the name exists; otherwise, the id of the service. A failure of the
+// notice is only logged.
 async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
     try {
         const [nickname, currentService] = await Promise.all([
@@ -301,8 +310,8 @@ async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
 
 type FileData = { size: number; mime: string; name: string; file: string };
 
-// Resolvido dentro de USER_THUMBS seja qual for o valor do campo avatar. undefined = recusado, inexistente
-// ou nao arquivo (305, Tabela C.75).
+// Resolved inside USER_THUMBS whatever the value of the avatar field.
+// undefined = refused, nonexistent or not a file (305, Table C.75).
 function getFile(fpath: string): FileData | undefined {
     const entry = resolveInsideDir(process.env.USER_THUMBS, fpath);
     if (entry === undefined || !entry.stat.isFile()) return undefined;
@@ -318,8 +327,9 @@ function getFile(fpath: string): FileData | undefined {
     };
 }
 
-// Tabela C.75: Content-Type pelo MIME derivado da extensao. Estas sao as do avatar; o resto sai
-// application/octet-stream, como na C.6.4.7 (Tabela C.17).
+// Table C.75: Content-Type by the MIME type derived from the extension.
+// These are the avatar ones; any other is application/octet-stream, as in
+// C.6.4.7 (Table C.17).
 const MIME_BY_EXT: Record<string, string> = {
     '.svg': 'image/svg+xml',
     '.png': 'image/png',

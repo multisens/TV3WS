@@ -1,7 +1,10 @@
-// GET /tv3/authorize e GET /tv3/token (C.6.1.2, C.6.1.3): router real sobre um Express minimo, Redis e core
-// por dubles (pop-up respondido pelo duble). Clientid ja usado da 101 sem nova consulta (Tabela C.3;
-// C.6.1.4.4), clients:authorized x clients:blocked, Redis fora, PIN de 4 digitos, vazio = ausente, challenge unico,
-// sim do nao local gravado so no /tv3/token que confere o desafio (C.4.2.3).
+// GET /tv3/authorize and GET /tv3/token (C.6.1.2, C.6.1.3): the real router
+// on a minimal Express, Redis and core by doubles (the pop-up answered by
+// the double). A clientid already used gives 101 without a new prompt
+// (Table C.3; C.6.1.4.4), clients:authorized x clients:blocked, Redis down,
+// a 4-digit PIN, empty = absent, a single-use challenge, the yes of a
+// non-local client stored only on the /tv3/token that checks the challenge
+// (C.4.2.3).
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -12,26 +15,27 @@ import { randomUUID, randomBytes, createHash, createCipheriv, createDecipheriv, 
 import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
 
-// --- dubles ------------------------------------------------------------------
+// --- doubles -----------------------------------------------------------------
 const fake = createFakeRedis();
 const fakeRedis = fake.redis;
 const store = fake.store;
 const members = (k: string) => [...((store.get(k) as Set<string> | undefined) ?? [])];
 
-// Resposta do "espectador" ao pop-up de autorizacao e contagem de pop-ups.
+// Answer of the "viewer" to the authorization pop-up, and count of pop-ups.
 let viewerAnswer = true;
 let yesNoPopUps = 0;
-// PINs que o tv3ws mandou a TV mostrar (pm=kex)
+// PINs tv3ws sent the TV to show (pm=kex).
 const pins: string[] = [];
-// chaves que o tv3ws mandou a TV mostrar no QR code (pm=qrcode)
+// Keys tv3ws sent the TV to show in the QR code (pm=qrcode).
 const qrKeys: string[] = [];
+// The pop-ups publish nothing (no MQTT).
 const fakeCore = {
     async showYesNoPopUpAsync(_msg: string, _timeout: number) { yesNoPopUps++; return viewerAnswer; },
-    showQRCodePopUp(key: string, _timeout: number) { qrKeys.push(key); /* sem MQTT */ },
-    showPINPopUp(pin: string, _timeout: number) { pins.push(pin); /* sem MQTT */ },
-    // fechamento no fim do pareamento (conferido em pairing-popup.test.ts)
-    closeQRCodePopUp() { /* sem MQTT */ },
-    closePINPopUp() { /* sem MQTT */ },
+    showQRCodePopUp(key: string, _timeout: number) { qrKeys.push(key); },
+    showPINPopUp(pin: string, _timeout: number) { pins.push(pin); },
+    // Closing at the end of the pairing (checked in pairing-popup.test.ts).
+    closeQRCodePopUp() { },
+    closePINPopUp() { },
 };
 
 function stub(rel: string, exports: object): void {
@@ -53,22 +57,25 @@ const manager = require('../src/modules/auth-manager/manager') as typeof import(
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
-// O QR code ou o PIN na tela faz o /tv3/authorize seguinte receber 103, e varios casos daqui deixam o
-// pareamento aberto: cada caso comeca com a camada livre (os do 103 estao em pairing-popup.test.ts).
+// The QR code or PIN on screen makes the next /tv3/authorize get 103, and
+// several cases here leave the pairing open: each case starts with the layer
+// free (the 103 cases are in pairing-popup.test.ts).
 beforeEach(() => _camadaParaTestes.limpar());
 
-// --- servidor ------------------------------------------------------------------
+// --- server ------------------------------------------------------------------
 let server: Server;
 let base = '';
 before(async () => {
     const app = express();
-    // x-teste-https: req.protocol vale 'https' (chegada por HTTPS, que este servidor de teste nao tem)
+    // x-teste-https: req.protocol is 'https' (arrival by HTTPS, which this test
+    // server does not have).
     app.use((req, _res, next) => {
         if (req.get('x-teste-https')) Object.defineProperty(req, 'protocol', { value: 'https' });
         next();
     });
     app.use('/tv3', router);
-    app.use(errorHandler);   // camada C.3.2 real: excecao -> 404 {error:200}
+    // The real C.3.2 layer: an exception becomes 404 {error:200}.
+    app.use(errorHandler);
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3`;
 });
@@ -87,14 +94,14 @@ const expectError = (r: { status: number; type: string; json: any }, code: numbe
     assert.equal(r.json.error, code, JSON.stringify(r.json));
     assert.equal(typeof r.json.description, 'string');
 };
-// Pop-ups abertos durante fn (o 101 nao pode consultar o espectador).
+// Pop-ups opened during fn (the 101 must not prompt the viewer).
 async function popUpsDuring(fn: () => Promise<void>): Promise<number> {
     const before = yesNoPopUps;
     await fn();
     return yesNoPopUps - before;
 }
 
-// --- casos -----------------------------------------------------------------------
+// --- cases -------------------------------------------------------------------
 test('local autonomo: primeira autorizacao da refreshToken; reuso do clientid da 101 sem pop-up', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
@@ -121,9 +128,10 @@ test('o refresh token guardado continua valendo em /tv3/token depois do 101', as
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
     assert.equal(typeof tok.json.accessToken, 'string');
     assert.equal(tok.json.tokenType, 'Bearer');
-    assert.notEqual(tok.json.refreshToken, first.json.refreshToken); // rotacao a cada /token
+    // Rotation on every /token.
+    assert.notEqual(tok.json.refreshToken, first.json.refreshToken);
 
-    // o refresh token rotacionado vale; o antigo nao (101 na C.6.1.3)
+    // The rotated refresh token is valid; the old one is not (101 on C.6.1.3).
     const next = await get('/token', { clientid: cid, 'refresh-token': tok.json.refreshToken });
     assert.equal(next.status, 200, JSON.stringify(next.json));
     expectError(await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken }), 101);
@@ -141,7 +149,7 @@ test('quem perdeu o refresh token autoriza de novo com clientid novo (nova consu
     assert.equal(typeof fresh!.json.refreshToken, 'string');
 });
 
-// o tv3ws nunca emite credencial de classe associada
+// tv3ws never issues a credential of the associated class.
 test('local associado (Origin em origins:associated): 106 em /authorize, sem pop-up e sem registro', async () => {
     viewerAnswer = true;
     const origin = 'http://app-associada.test';
@@ -152,7 +160,8 @@ test('local associado (Origin em origins:associated): 106 em /authorize, sem pop
     assert.ok(!members('clients:authorized').includes(cid));
     assert.ok(!members('clients:blocked').includes(cid));
     assert.equal(store.has(`client:${cid}`), false);
-    // com pm o cliente se classifica nao local (a classe da credencial nao e associada)
+    // With pm the client is classified as non-local (the class of the
+    // credential is not associated).
     assert.notEqual((await authorize(randomUUID(), { pm: 'qrcode' }, { Origin: origin })).status, 106);
 });
 
@@ -188,16 +197,18 @@ test('nao local (pm=kex): a resposta traz "key" e o cliente deriva o mesmo segre
     const r = await authorize(cid, { pm: 'kex', key: ecdh.getPublicKey(null, 'uncompressed').toString('base64url') });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(typeof r.json.challenge, 'string');
-    // Tabela C.3 (3): {challenge, key}; key = ponto SEC 1 sem compressao (C.4.3.4)
+    // Table C.3 (3): {challenge, key}; key = SEC 1 point without compression
+    // (C.4.3.4).
     assert.equal(typeof r.json.key, 'string', JSON.stringify(r.json));
     const serverKey = Buffer.from(r.json.key, 'base64url');
     assert.equal(serverKey.length, 65);
     assert.equal(serverKey[0], 0x04);
 
-    // C.4.3.3: segredo = SHA-256(ECDH)[0:16]; challenge-response da Tabela C.4
+    // C.4.3.3: secret = SHA-256(ECDH)[0:16]; challenge-response of Table C.4.
     const hash = sha(ecdh.computeSecret(serverKey));
     const secret = hash.subarray(0, 16);
-    // C.4.3.3, nota: o PIN mostrado na TV e hash mod 10 000, com quatro digitos
+    // C.4.3.3, note: the PIN shown on the TV is the hash mod 10 000, with four
+    // digits.
     const expectedPin = (BigInt('0x' + hash.toString('hex')) % BigInt(10000)).toString().padStart(4, '0');
     assert.equal(pins[pins.length - 1], expectedPin);
     assert.match(pins[pins.length - 1], /^\d{4}$/);
@@ -213,7 +224,8 @@ test('nao local (pm=kex): a resposta traz "key" e o cliente deriva o mesmo segre
 
 test('PIN do kex com quatro digitos (C.4.3.3): zeros a esquerda, "0042" e nao "42"', () => {
     const { pinFromHash } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
-    const hashOf = (n: bigint) => Buffer.from(n.toString(16).padStart(64, '0'), 'hex');   // 32 bytes, como o SHA-256
+    // 32 bytes, as SHA-256.
+    const hashOf = (n: bigint) => Buffer.from(n.toString(16).padStart(64, '0'), 'hex');
     const max = BigInt('0x' + 'f'.repeat(64));
     assert.equal(pinFromHash(hashOf(BigInt(42))), '0042');
     assert.equal(pinFromHash(hashOf(BigInt(10042))), '0042');
@@ -230,7 +242,7 @@ test('nao local (pm=qrcode): a resposta nao traz "key"', async () => {
     assert.equal(r.json.key, undefined);
 });
 
-// --- clientes autorizados ------------------------------------------------------------
+// --- authorized clients ------------------------------------------------------
 test('autorizado entra em clients:authorized; recusado so em clients:blocked', async () => {
     viewerAnswer = true;
     const ok = randomUUID();
@@ -272,7 +284,7 @@ test('cliente so com client:{id}, fora de clients:authorized: reuso da 101 e o b
     await fakeRedis.sadd('clients:blocked', legacyBlocked);
 
     assert.equal(await popUpsDuring(async () => { expectError(await authorize(legacy), 101); }), 0);
-    // sem a inclusao do boot, /token nao o reconhece como autorizado
+    // Without the boot inclusion, /token does not recognize it as authorized.
     expectError(await get('/token', { clientid: legacy, 'refresh-token': 'rt-antigo' }), 102);
 
     const added = await manager.backfillAuthorizedClients();
@@ -285,7 +297,7 @@ test('cliente so com client:{id}, fora de clients:authorized: reuso da 101 e o b
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
 });
 
-// --- escritas de cliente pelas funcoes do Redis --------------------------------------
+// --- client writes by the Redis functions -----------------------------------
 test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das funcoes tv30_cliente_*', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
@@ -326,7 +338,7 @@ test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora 
     assert.ok(!members('clients:authorized').includes(cid));
 });
 
-// --- Redis fora do ar -----------------------------------------------------------------
+// --- Redis down --------------------------------------------------------------
 test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-up', async () => {
     viewerAnswer = true;
     fake.setDown(true);
@@ -341,16 +353,16 @@ test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-u
     }
 });
 
-// --- parametro vazio e challenge de uso unico ------------------------------------------
-// Vazio ou so espacos vale como ausente (105, Tabelas C.3 e C.4); depois do sucesso por challenge-response,
-// a repeticao da 102 (Tabela C.4).
+// --- empty parameter and single-use challenge -------------------------------
+// An empty or blank value counts as absent (105, Tables C.3 and C.4); after
+// the success by challenge-response, a repetition gives 102 (Table C.4).
 const sha = (b: Buffer) => createHash('sha256').update(b).digest();
 const aes = (enc: boolean, k: Buffer, d: Buffer) => {
     const c = enc ? createCipheriv('aes-128-ecb', k, null) : createDecipheriv('aes-128-ecb', k, null);
     return Buffer.concat([c.update(d), c.final()]);
 };
 
-// GET com a query escrita a mao (para mandar "refresh-token=" vazio etc.)
+// GET with a hand-written query (to send an empty "refresh-token=" etc.).
 async function getRaw(route: string, rawQuery: string, headers: Record<string, string> = {}) {
     const res = await fetch(`${base}${route}?${rawQuery}`, { headers });
     const type = res.headers.get('content-type') ?? '';
@@ -361,8 +373,8 @@ const HTTPS = { 'x-teste-https': '1' };
 
 type NonLocal = { cid: string; secret: Buffer; cr: string; plain: Buffer };
 
-// /tv3/authorize de cliente nao local e a solucao do desafio (Tabela C.4),
-// sem chamar o /tv3/token
+// /tv3/authorize of a non-local client and the solution of the challenge
+// (Table C.4), without calling /tv3/token.
 async function pairNonLocal(pm: 'qrcode' | 'kex', cid: string = randomUUID()): Promise<NonLocal> {
     viewerAnswer = true;
     const ecdh = createECDH('prime256v1');
@@ -386,22 +398,24 @@ const notStored = (cid: string) => {
     assert.ok(!members('clients:authorized').includes(cid), `${cid} em clients:authorized`);
 };
 
-// --- sim do nao local: so em memoria ate o challenge-response conferido (C.4.2.3) -------
+// --- the yes of a non-local client: memory only until the challenge-response
+// is checked (C.4.2.3) ---
 for (const pm of ['qrcode', 'kex'] as const) {
     test(`pm=${pm}: o sim sem pareamento concluido nao grava nada; o mesmo clientid ve o pop-up de novo e so o desafio novo conclui`, async () => {
         fake.fcalls.length = 0;
         const p = await pairNonLocal(pm);
         assert.deepEqual(fake.fcalls.map(c => c[0]), [], 'nenhuma gravacao no sim do nao local');
         notStored(p.cid);
-        // o refresh-token exige a autorizacao gravada
+        // refresh-token requires the stored authorization.
         expectError(await getRaw('/token', `clientid=${p.cid}&refresh-token=x`, HTTPS), 102);
 
-        // camada livre, como no fim da trava: a tentativa pendente nao da 101
+        // Layer free, as at the end of the lock: the pending attempt does not
+        // give 101.
         _camadaParaTestes.limpar();
         let p2: NonLocal | undefined;
         assert.equal(await popUpsDuring(async () => { p2 = await pairNonLocal(pm, p.cid); }), 1);
         notStored(p.cid);
-        // a tentativa anterior foi descartada
+        // The previous attempt was discarded.
         expectError(await tokenByChallenge(p), 102);
 
         const ok = await tokenByChallenge(p2!);
@@ -496,7 +510,7 @@ test('nao local com refresh-token ou challenge-response vazios: 105, sem pular o
             assert.equal(r.json.accessToken, undefined, q);
         }
     }
-    // o pareamento segue aberto: a solucao do desafio conclui
+    // The pairing stays open: the solution of the challenge concludes it.
     const ok = await tokenByChallenge(p);
     assert.equal(ok.status, 200);
     assert.match(ok.type, /application\/octet-stream/);
@@ -545,20 +559,20 @@ for (const pm of ['qrcode', 'kex'] as const) {
         assert.equal(first.status, 200);
         const body = JSON.parse(aes(false, p.secret, first.raw).toString('utf8'));
 
-        // o material do pareamento saiu do cliente
+        // The pairing material left the client.
         const client = await manager.GetAuthorizedClient(p.cid);
         assert.equal(client.hasPendingChallenge(), false);
         assert.equal(client.getSecret(), undefined);
         assert.equal(client.getChallenge(), undefined);
         if (pm === 'kex') assert.throws(() => client.getECDHPublicKey(), /no ECDH key pair/);
 
-        // a repeticao, por HTTP e por HTTPS
+        // The repetition, over HTTP and over HTTPS.
         for (const h of [{}, HTTPS]) {
             const again = await tokenByChallenge(p, h);
             expectError(again, 102);
             assert.equal(again.json.accessToken, undefined);
         }
-        // e o refresh token da primeira resposta nao foi rotacionado por ela
+        // And the refresh token of the first response was not rotated by it.
         const renew = await getRaw('/token', `clientid=${p.cid}&refresh-token=${body.refreshToken}`, HTTPS);
         assert.equal(renew.status, 200, JSON.stringify(renew.json));
         assert.equal(typeof renew.json.accessToken, 'string');
@@ -574,8 +588,8 @@ test('cliente local com challenge-response: 102, nao ha challenge pendente', asy
 
 test('dois /tv3/token simultaneos com o mesmo challenge-response: so um emite credencial', async () => {
     const p = await pairNonLocal('qrcode');
-    // escrita lenta no armazenamento: o segundo /tv3/token e conferido
-    // enquanto o primeiro ainda emite a credencial
+    // A slow write to storage: the second /tv3/token is checked while the
+    // first one still issues the credential.
     const call = fakeRedis.call;
     fakeRedis.call = async (...a: unknown[]) => { await new Promise(r => setTimeout(r, 50)); return call(...a); };
     try {
@@ -602,13 +616,14 @@ test('emissao falha depois do desafio conferido: o material volta, o mesmo chall
     expectError(await tokenByChallenge(p), 102);
 });
 
-// --- comparacao de segredo: bytes, crypto.timingSafeEqual, tamanho diferente = falha --------
+// --- secret comparison: bytes, crypto.timingSafeEqual, different length
+// fails ---
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ClientClass = require('../src/modules/auth-manager/client').default as typeof import('../src/modules/auth-manager/client').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const cryptoModule = require('crypto') as typeof import('crypto');
 
-// conta as chamadas de crypto.timingSafeEqual durante fn
+// Counts the calls of crypto.timingSafeEqual during fn.
 function timingSafeCalls(fn: () => void): number {
     const orig = cryptoModule.timingSafeEqual;
     let calls = 0;
@@ -620,7 +635,8 @@ function timingSafeCalls(fn: () => void): number {
 test('Client.validateRefreshToken: igual vale, diferente ou de outro tamanho nao (sem lancar), lista nao; tempo constante', () => {
     const c = new ClientClass(randomUUID());
     const rt = c.getRefreshToken();
-    const other = rt.slice(0, -1) + (rt.endsWith('A') ? 'B' : 'A');   // mesmo tamanho
+    // Same length.
+    const other = rt.slice(0, -1) + (rt.endsWith('A') ? 'B' : 'A');
     let r: boolean[] = [];
     const calls = timingSafeCalls(() => { r = [c.validateRefreshToken(rt), c.validateRefreshToken(other)]; });
     assert.deepEqual(r, [true, false]);
@@ -648,13 +664,15 @@ test('Client.validateChallenge: compara bytes; tamanho diferente ou sem challeng
 });
 
 test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8: 102; a resposta certa conclui depois', async () => {
-    // procura um desafio cujo hash tenha um byte de 0xF8 a 0xFF (nunca e
-    // UTF-8 valido: vira U+FFFD sozinho); trocar esse byte por outro da mesma
-    // faixa nao muda o .toString() (P = 1 - (248/256)^32 ~ 0,64 por desafio)
+    // Looks for a challenge whose hash has a byte from 0xF8 to 0xFF (never
+    // valid UTF-8: it becomes U+FFFD alone); replacing that byte by another of
+    // the same range does not change the .toString() (P = 1 - (248/256)^32
+    // ~ 0.64 per challenge).
     let p: NonLocal | undefined;
     let i = -1;
     for (let tries = 0; tries < 40 && i < 0; tries++) {
-        // cada tentativa deixa o QR code da anterior na tela (103): libera a camada para a proxima
+        // Each attempt leaves the QR code of the previous one on screen (103):
+        // frees the layer for the next.
         _camadaParaTestes.limpar();
         p = await pairNonLocal('qrcode');
         i = sha(p.plain).findIndex(b => b >= 0xf8);
@@ -669,7 +687,7 @@ test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8: 102; 
     const r = await getRaw('/token', `clientid=${p!.cid}&challenge-response=${forgedCr}`);
     expectError(r, 102);
     assert.equal(r.json.accessToken, undefined);
-    // o pareamento segue aberto: a solucao certa conclui
+    // The pairing stays open: the right solution concludes it.
     const ok = await tokenByChallenge(p!);
     assert.equal(ok.status, 200);
     assert.equal(typeof JSON.parse(aes(false, p!.secret, ok.raw).toString('utf8')).accessToken, 'string');
@@ -698,8 +716,10 @@ test('refresh-token de outro tamanho ou repetido: 101, e o legitimo segue valend
     assert.equal(ok.status, 200, JSON.stringify(ok.json));
 });
 
-// --- challenge-response que nao decifra (bloco ou padding PKCS#7 invalido, lista) ---------
-// 102 com a mesma resposta do hash errado (Tabela C.4), sem credencial, e a tentativa segue aberta.
+// --- a challenge-response that does not decrypt (invalid block or PKCS#7
+// padding, list) ---
+// 102 with the same response as a wrong hash (Table C.4), no credential, and
+// the attempt stays open.
 const aesRaw = (k: Buffer, d: Buffer) => {
     const c = createCipheriv('aes-128-ecb', k, null);
     c.setAutoPadding(false);
@@ -721,7 +741,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
             ['so caracteres fora do base64 (decodifica vazio)', '!!!!'],
             ['repetido (lista)', `${p.cr}&challenge-response=${p.cr}`],
         ];
-        // referencia: hash errado bem cifrado
+        // Reference: a wrong hash well encrypted.
         const wrongHash = await getRaw('/token', `clientid=${p.cid}&challenge-response=${b64(aes(true, p.secret, sha(randomBytes(16))))}`);
         expectError(wrongHash, 102);
         for (const [what, cr] of malformed) {
@@ -732,7 +752,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
                 assert.equal(r.json.accessToken, undefined, what);
             }
         }
-        // o pareamento segue aberto: a solucao certa conclui (uma vez)
+        // The pairing stays open: the right solution concludes it (once).
         assert.equal(manager.GetPendingClient(p.cid)?.hasPendingChallenge(), true);
         const ok = await tokenByChallenge(p);
         assert.equal(ok.status, 200);

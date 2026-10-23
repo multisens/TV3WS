@@ -1,4 +1,5 @@
-// GET /manifest (C.3.4) sem Express real: o app e o client-identification sao dubles.
+// GET /manifest (C.3.4) without a real Express: the app and
+// client-identification are doubles.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -21,8 +22,8 @@ const { registerManifest } = require(src('manifest')) as typeof import('../src/m
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { resolveAdvertisedEndpoint } = require(src('ssdp-config')) as typeof import('../src/ssdp-config');
 
-// reqHeaders: os cabecalhos da requisicao (X-TV30-Host vem da borda; Host,
-// do cliente). Sem nenhum, a cadeia do boot.
+// reqHeaders: the headers of the request (X-TV30-Host from the edge; Host
+// from the client). Without any, the boot chain.
 function call(env: NodeJS.ProcessEnv, reqHeaders: Record<string, string> = {}): { status: number; headers: Record<string, string> } {
     const routes = new Map<string, Handler>();
     const app = { use(p: string, h: Handler) { routes.set(p, h); } };
@@ -54,7 +55,8 @@ test('/manifest expoe ao navegador exatamente os cabecalhos Server-* e Device-* 
         'Device-BrandName', 'Device-Model', 'Device-FriendlyName']);
     assert.deepEqual([...sent].sort(), [...exposed].sort(), 'todo cabecalho enviado esta na lista, e so eles');
     assert.ok(sent.every(k => /^(Server|Device)-/.test(k)));
-    // a borda define o Access-Control-Allow-Origin; duplicado, o Chrome recusa
+    // No Access-Control-Allow-Origin here: a duplicated one is refused by the
+    // browser.
     assert.equal(headers['Access-Control-Allow-Origin'], undefined);
 });
 
@@ -70,18 +72,19 @@ test('/manifest usa SSDP_ADVERTISE_HOST, as portas da borda e os metadados do am
     assert.equal(headers['Device-FriendlyName'], 'Sala');
 });
 
-// o host e o pelo qual o cliente alcancou o /manifest, para casar com o LOCATION do anunciante
+// The host is the one by which the client reached the /manifest, to match
+// the LOCATION of the announcer.
 test('/manifest com o host da requisicao (X-TV30-Host da borda), e SSDP_ADVERTISE_HOST prevalece', () => {
     let { headers } = call({ SERVER_URL: 'localhost' }, { 'X-TV30-Host': '192.168.0.23:44642', Host: 'tv3ws:44652' });
     assert.equal(headers['Server-BaseURL'], '192.168.0.23:44642');
     assert.equal(headers['Server-SecureBaseURL'], '192.168.0.23:44643');
-    // sem a borda (direto no tv3ws): o Host da propria requisicao
+    // Without the edge (directly on tv3ws): the Host of the request itself.
     ({ headers } = call({ SERVER_URL: 'localhost' }, { Host: '10.0.0.9:44642' }));
     assert.equal(headers['Server-BaseURL'], '10.0.0.9:44642');
-    // IPv6 entre colchetes
+    // IPv6 in brackets.
     ({ headers } = call({}, { 'X-TV30-Host': '[fe80::1]:44642' }));
     assert.equal(headers['Server-BaseURL'], '[fe80::1]:44642');
-    // sobreposicao
+    // Override.
     ({ headers } = call({ SSDP_ADVERTISE_HOST: 'tv.local' }, { 'X-TV30-Host': '192.168.0.23:44642' }));
     assert.equal(headers['Server-BaseURL'], 'tv.local:44642');
 });

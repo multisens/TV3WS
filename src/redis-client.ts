@@ -2,9 +2,9 @@ import Redis, { RedisOptions } from 'ioredis';
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-// Falha de Redis nao pode ser silenciosa nem travar a API: o padrao do ioredis espera sem limite com o
-// Redis congelado. commandTimeout fica abaixo dos 2 s da borda, para o 404 {error:200} sair do tv3ws
-// (C.3.2). A fila offline deixa os comandos do boot e de reconexao curta esperarem a conexao.
+// ioredis options so that a Redis failure fails fast: connection and command
+// timeouts, one retry per request; the offline queue lets the commands of the
+// boot and of a short reconnection wait for the connection.
 export const FAIL_FAST_OPTIONS = {
     connectTimeout: 2000,
     commandTimeout: 1500,
@@ -17,16 +17,16 @@ export function redisOptions(overrides: RedisOptions = {}): RedisOptions {
     return {
         host: process.env.REDIS_HOST || 'localhost',
         port: parseInt(process.env.REDIS_PORT || '6379'),
-        // a conexao abre no boot (server.ts, connectRedis) ou no primeiro
-        // comando: importar o modulo (testes) nao abre socket
+        // The connection opens at boot (connectRedis) or on the first command:
+        // importing the module opens no socket.
         lazyConnect: true,
         ...FAIL_FAST_OPTIONS,
         ...overrides,
     };
 }
 
-// Log explicito de conexao: pronto, perda, falhas (a primeira de cada
-// sequencia, e o total ao voltar) e encerramento.
+// Logs the connection events: ready, loss, failures (the first of each
+// sequence, and the total on recovery) and end.
 export function logRedisEvents(client: Redis, where: string, log: (msg: string) => void = console.error): void {
     let wasReady = false;
     let failures = 0;
@@ -53,14 +53,14 @@ const options = redisOptions();
 const redis = new Redis(options);
 logRedisEvents(redis, `${options.host}:${options.port}`);
 
-// Abre a conexao no boot. A falha da primeira tentativa ja sai no log
-// ('error') e o ioredis segue tentando; nada a fazer com a rejeicao.
+// Opens the connection at boot. A failure of the first attempt is logged
+// ('error') and ioredis keeps trying; the rejection is ignored.
 export function connectRedis(): void {
     if (redis.status === 'wait') redis.connect().catch(() => undefined);
 }
 
-// Tarefa de boot que precisa do Redis (limpeza de espelho, migracao): roda
-// UMA vez, no primeiro 'ready'. Falha vai para o log com o nome da tarefa.
+// Runs a boot task that needs Redis (mirror cleanup, migration) once, on the
+// first 'ready'. A failure is logged with the name of the task.
 export function whenRedisReady(name: string, task: () => Promise<unknown>): void {
     const run = () => {
         task().catch((err: Error) => console.error(`[redis] FALHA na tarefa de boot "${name}": ${err?.message}`));

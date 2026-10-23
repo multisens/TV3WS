@@ -31,12 +31,13 @@ function getRendererMetadata(rendererId: string) {
   };
 }
 
-// Propriedades validas no comando da C.6.16.3: a Tabela C.83 remete ao Anexo A (Tabela A.30 e posicao do
-// efeito da A.3.19, atributos de <region> no NCL). Nome fora delas da 101.
+// Valid properties in the C.6.16.3 command: Table C.83 refers to Annex A
+// (Table A.30 and the effect position of A.3.19, attributes of <region> in
+// NCL). Any other name gives 101.
 const EFFECT_PROPERTIES = new Set([
-  // Tabela A.30
+  // Table A.30
   "intensityValue", "color", "scent", "frequency",
-  // A.3.19, posicao do efeito
+  // A.3.19, effect position
   "azimuthal", "polar", "width", "height", "direction", "location",
 ]);
 

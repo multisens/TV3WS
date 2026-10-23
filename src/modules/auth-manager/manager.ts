@@ -6,7 +6,7 @@ dotenv.config();
 
 export type TokenAlg = "HS256" | "HS512" | "RS256" | "RS512";
 
-// A classe viaja na credencial; quem a confere e a borda (o tv3ws so emite).
+// Claims of the access token; the class goes in the credential.
 type TokenPayload = {
     iat: number;
     nbf: number;
@@ -19,18 +19,19 @@ type TokenPayload = {
 const jwtSecret = process.env.JWT_SECRET || '0123456789';
 const jwtIssuer = process.env.JWT_ISSUER || 'GenericIssuer';
 
-// Duracao do accessToken em segundos (a norma C.6.1.3 define expiresIn como
-// duracao, nao instante).
+// Duration of the accessToken in seconds (C.6.1.3: expiresIn is a duration,
+// not an instant).
 const ACCESS_TOKEN_TTL = 24 * 60 * 60;
 
-// Autorizacao no Redis, que sobrevive a reinicio:
-// - client:{id}         HASH  classe e credenciais emitidas;
-// - clients:authorized  SET   clientids autorizados pelo espectador;
-// - clients:blocked     SET   clientids recusados (a borda recusa o token deles com 107).
-// Um clientid fica em no maximo um dos conjuntos; as funcoes do Redis (redis-funcoes.ts) mantem isso.
-// authorizedClients e cache do objeto vivo de quem esta gravado. pendingClients guarda o nao local que
-// aceitou o pop-up, com o material do pareamento, ate o /tv3/token que confere o desafio (C.4.2.3); so em
-// memoria, um reinicio do tv3ws o perde.
+// Authorization in Redis, which survives a restart:
+// - client:{id}         HASH  class and issued credentials;
+// - clients:authorized  SET   clientids authorized by the viewer;
+// - clients:blocked     SET   clientids refused.
+// A clientid is in at most one of the sets. authorizedClients caches the
+// live object of the stored clients. pendingClients keeps a non-local
+// client that accepted the pop-up, with the pairing material, until the
+// /tv3/token that checks the challenge (C.4.2.3); memory only, lost on a
+// restart of tv3ws.
 import redis from '../../redis-client';
 import * as funcoes from '../../redis-funcoes';
 
@@ -54,15 +55,15 @@ async function persistClient(client: Client): Promise<void> {
     await funcoes.clienteGrava(client.getId(), clientFields(client));
 }
 
-// Autorizado = membro de clients:authorized. O conjunto (e nao o cache em
-// memoria) decide, para que um bloqueio gravado no armazenamento valha aqui
-// tambem.
+// Authorized = member of clients:authorized. The set, not the in-memory
+// cache, decides, so that a block stored in Redis applies here too.
 export async function isAuthorized(id: string): Promise<boolean> {
     return (await redis.sismember(AUTHORIZED_KEY, id)) === 1;
 }
 
-// Para o 101 no reuso de clientid (C.6.1.2, Tabela C.3). 'used' inclui quem so tem o registro client:{id};
-// a tentativa pendente do nao local nao conta.
+// For the 101 on clientid reuse (C.6.1.2, Table C.3). 'used' includes a
+// client that has only the client:{id} record; a pending attempt of a
+// non-local client does not count.
 export type ClientIdStatus = 'new' | 'used' | 'blocked';
 
 export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
@@ -82,7 +83,8 @@ export async function AuthorizeClient(id: string, clientClass: ClientClass = 'lo
     return client;
 }
 
-// "Sim" do nao local: nada vai ao Redis antes do pareamento concluido (C.4.2.3).
+// The "yes" of a non-local client: nothing goes to Redis before the pairing
+// completes (C.4.2.3).
 export function StartPairing(id: string): Client {
     const client = new Client(id, 'non-local');
     pendingClients.set(id, client);
@@ -93,12 +95,13 @@ export function GetPendingClient(id: string): Client | undefined {
     return pendingClients.get(id);
 }
 
-// Um novo /tv3/authorize do mesmo clientid encerra a tentativa pendente.
+// A new /tv3/authorize of the same clientid ends the pending attempt.
 export function DiscardPending(id: string): void {
     pendingClients.delete(id);
 }
 
-// challenge-response conferido: grava a autorizacao; se a gravacao falhar, o cliente segue pendente.
+// challenge-response checked: stores the authorization; if storing fails,
+// the client stays pending.
 export async function AuthorizePairedClient(client: Client): Promise<void> {
     const id = client.getId();
     await funcoes.clienteAutoriza(id, clientFields(client));
@@ -106,8 +109,8 @@ export async function AuthorizePairedClient(client: Client): Promise<void> {
     authorizedClients.set(id, client);
 }
 
-// /tv3/token passa a recusar, e a borda recusa o accessToken ja emitido (107). O registro client:{id}
-// fica, para que um desbloqueio (tela da C.4.2.2, nao implementada) restaure a autorizacao.
+// Removes the client from the authorized ones and from the pending ones,
+// and adds it to clients:blocked; the client:{id} record stays.
 export async function BlockClient(id: string): Promise<void> {
     authorizedClients.delete(id);
     pendingClients.delete(id);
@@ -122,8 +125,9 @@ export async function listBlockedClients(): Promise<string[]> {
     return (await redis.smembers(BLOCKED_KEY)).sort();
 }
 
-// Boot: poe em clients:authorized todo client:{id} nao bloqueado. Teste e insercao atomicos
-// (tv30_cliente_inclui_autorizado), para um bloqueio no meio nao furar a invariante.
+// Boot: adds to clients:authorized every client:{id} that is not blocked.
+// Check and insertion are atomic (tv30_cliente_inclui_autorizado), so that a
+// block in between does not break the invariant.
 export async function backfillAuthorizedClients(): Promise<number> {
     let cursor = '0';
     let added = 0;
@@ -152,7 +156,7 @@ export async function GetAuthorizedClient(id: string): Promise<Client> {
     throw Error(`Client ${id} is not authorized.`);
 }
 
-// Rotaciona o refresh token e persiste (a rotacao acontece a cada /token).
+// Rotates the refresh token and stores it.
 export async function rotateRefreshToken(id: string): Promise<string> {
     const client = await GetAuthorizedClient(id);
     const token = client.updateRefreshToken();
@@ -176,7 +180,8 @@ function createAccessToken(alg: TokenAlg, clientId: string, clientClass: ClientC
 }
 
 
-// expiresIn em segundos restantes (duracao, C.6.1.3); reaproveita o token ja emitido enquanto ele valer
+// expiresIn in remaining seconds (a duration, C.6.1.3); reuses the token
+// already issued while it is valid.
 export async function getClientAccessToken(id: string): Promise<[string, number]> {
     const client = await GetAuthorizedClient(id);
     const now = Math.floor(Date.now() / 1000);
@@ -187,7 +192,7 @@ export async function getClientAccessToken(id: string): Promise<[string, number]
             const payload = jwt.verify(token, jwtSecret) as TokenPayload;
             return [token, Math.max(payload.exp - now, 0)];
         } catch {
-            // expirado/invalido: cai para emissao de um novo
+            // Expired or invalid: a new one is issued.
         }
     }
     const token = createAccessToken('HS256', id, client.getClass());

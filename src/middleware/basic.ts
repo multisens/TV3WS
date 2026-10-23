@@ -1,9 +1,9 @@
 import express, { NextFunction, Request, Response, Router } from 'express';
 const router: Router = express.Router();
 
-// Versao de API (C.3.6): a borda negocia e repassa a versao em X-TV30-API-Version (apagando a do
-// cliente); aqui ela vai para res.locals e para o API-Version de toda resposta, inclusive erro
-// (C.3.6.6). Sem o cabecalho (requisicao que nao passou pela borda, como nos testes), vale 2.0 (C.3.6.5).
+// API version (C.3.6): read from X-TV30-API-Version into res.locals and set
+// in the API-Version header of every response, errors included (C.3.6.6).
+// Without the header, or with a value outside X.Y, 2.0 (C.3.6.5).
 export const INTERNAL_VERSION_HEADER = 'X-TV30-API-Version';
 const DEFAULT_VERSION = '2.0';
 
@@ -13,7 +13,8 @@ function decidedVersion(req: Request): string {
 }
 
 router.use((req: Request, res: Response, next: NextFunction) => {
-    // CORS fica na borda: setar aqui duplica o Access-Control-Allow-Origin, e o Chrome bloqueia.
+    // No CORS header here: a duplicated Access-Control-Allow-Origin is blocked
+    // by the browser.
 
     res.setHeader('Content-Type', 'application/json');
 

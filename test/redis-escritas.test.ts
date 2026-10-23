@@ -1,5 +1,6 @@
-// Teste estatico: em src/, so redis-funcoes.ts escreve nas familias do Redis; a excecao e o espelho
-// remote-device*. As regras vem de infra/redis/test/escritas.js: precisa do TV30 com os submodulos.
+// Static test: in src/, only redis-funcoes.ts writes to the Redis families;
+// the exception is the remote-device* mirror. The rules come from
+// infra/redis/test/escritas.js: needs TV30 with the submodules.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';

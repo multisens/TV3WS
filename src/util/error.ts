@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 
-// Codigos de erro do Anexo C (C.3.3). O codigo vai no corpo; o status HTTP de falha e sempre 404 (C.3.2).
+// Error codes of Annex C (C.3.3). The code goes in the body; the HTTP
+// status of a failure is always 404 (C.3.2).
 const Errors: Record<number, string> = {
     [100]: 'API not found',
     [101]: 'Illegal argument value',
@@ -32,7 +33,8 @@ const Errors: Record<number, string> = {
     [405]: 'Access to viewer profile information not authorized',
 }
 
-// C.3.2: so os campos error e description; o detalhe vai concatenado ("Missing argument: handle").
+// C.3.2: only the error and description fields; the detail is appended
+// ("Missing argument: handle").
 export function returnError(res: Response, code: number, detail?: string) {
     const base = Errors[code] ?? 'Unknown error';
     res.status(404).json({
@@ -41,7 +43,7 @@ export function returnError(res: Response, code: number, detail?: string) {
     });
 }
 
-// sem isto o Express devolve o 404 HTML default, fora do formato C.3.2
+// Answers 100 in the format of C.3.2 to a route not found.
 export function apiNotFound(req: Request, res: Response) {
     returnError(res, 100, `${req.method} ${req.originalUrl}`);
 }
@@ -52,14 +54,15 @@ export class ApiError extends Error {
     }
 }
 
-// Qualquer excecao que nao seja ApiError (inclusive promise rejeitada, Express 5) vira 200.
+// Any exception that is not an ApiError (a rejected promise included,
+// Express 5) becomes 200.
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
     if (res.headersSent) return next(err);
     if (err instanceof ApiError) {
         returnError(res, err.code, err.message !== Errors[err.code] ? err.message : undefined);
         return;
     }
-    // JSON malformado e argumento ilegal do cliente (101), nao falha da plataforma
+    // Malformed JSON is an illegal argument of the client (101).
     if ((err as { type?: unknown })?.type === 'entity.parse.failed') {
         returnError(res, 101, 'message body is not valid JSON, body');
         return;

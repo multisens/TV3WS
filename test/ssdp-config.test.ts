@@ -1,5 +1,5 @@
-// Endereco divulgado pela descoberta SSDP (C.3.4): host = SSDP_ADVERTISE_HOST > SERVER_URL > IP local;
-// portas da borda.
+// Address announced by the SSDP discovery (C.3.4): host =
+// SSDP_ADVERTISE_HOST > SERVER_URL > local IP; ports of the edge.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -49,14 +49,15 @@ test('avisos: host de loopback e porta fora da 44642; nenhum aviso de falta de T
     for (const host of ['192.168.1.150', 'tv.local', '[fe80::1]', '10.127.0.1']) {
         assert.ok(!isLoopbackHost(host), host);
     }
-    // so a sobreposicao fixa o host (src/manifest.ts): o loopback so avisa nela
+    // Only the override fixes the host (src/manifest.ts): loopback only warns
+    // with it.
     const loop = advertiseWarnings(resolveAdvertisedEndpoint({ SSDP_ADVERTISE_HOST: 'localhost' }, ip));
     assert.ok(loop.some(w => w.includes('loopback') && w.includes('SSDP_ADVERTISE_HOST')), loop.join('\n'));
     const viaServerUrl = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: 'localhost' }, ip));
     assert.ok(!viaServerUrl.some(w => w.includes('loopback')), viaServerUrl.join('\n'));
     const lan = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: '192.168.1.150' }, ip));
     assert.ok(!lan.some(w => w.includes('loopback') || w.includes('EDGE_HTTP_PORT')), lan.join('\n'));
-    // a 44643 tem TLS: nao ha aviso de porta sem TLS
+    // 44643 has TLS: no warning of a port without TLS.
     assert.ok(!lan.some(w => w.includes('SEM TLS')), lan.join('\n'));
     const port = advertiseWarnings(resolveAdvertisedEndpoint({ SERVER_URL: 'tv.local', EDGE_HTTP_PORT: '8080' }, ip));
     assert.ok(port.some(w => w.includes('EDGE_HTTP_PORT=8080') && w.includes('44642')), port.join('\n'));

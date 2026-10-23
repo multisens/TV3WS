@@ -1,6 +1,8 @@
-// Duble de Redis em memoria, so com os comandos que o tv3ws usa. Falha injetavel como o ioredis com o Redis
-// fora: comando avulso rejeita, pipeline resolve [erro, null] por entrada, MULTI rejeita no EXEC. FCALL imita
-// o efeito das funcoes tv30 sem conferir o esquema (testado em infra/redis/test); recusar() simula TV30ESQUEMA.
+// In-memory Redis double, with only the commands tv3ws uses. Injectable
+// failure as ioredis with Redis down: a single command rejects, a pipeline
+// resolves [error, null] per entry, MULTI rejects on EXEC. FCALL mimics the
+// effect of the tv30 functions without checking the schema; recusar()
+// simulates TV30ESQUEMA.
 type Value = string | Set<string> | Record<string, string>;
 
 export const FAKE_REDIS_ERROR = 'redis indisponivel (duble de teste)';
@@ -22,7 +24,7 @@ export function createFakeRedis() {
     };
     const glob = (pattern: string) => new RegExp('^' + pattern.split('*').map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
 
-    // comandos sincronos; o wrapper async aplica a falha injetada
+    // Synchronous commands; the async wrapper applies the injected failure.
     const ops = {
         get: (k: string) => (typeof store.get(k) === 'string' ? store.get(k) as string : null),
         set: (k: string, v: string) => { store.set(k, v); return 'OK'; },
@@ -56,9 +58,9 @@ export function createFakeRedis() {
         smembers: (k: string) => [...(set(k) ?? [])],
         scard: (k: string) => set(k)?.size ?? 0,
         keys: (p: string) => [...store.keys()].filter(k => glob(p).test(k)),
-        // varredura numa passada so (cursor '0' de volta)
+        // Scan in a single pass (cursor '0' back).
         scan: (_cursor: string, _m: string, p: string) => ['0', [...store.keys()].filter(k => glob(p).test(k))] as [string, string[]],
-        // so FCALL <funcao> 0 ...args (ver funcoes abaixo)
+        // Only FCALL <function> 0 ...args (see the functions below).
         call: (cmd: string, nome: string, numkeys: number | string, ...args: string[]) => {
             if (String(cmd).toUpperCase() !== 'FCALL') throw new Error(`call: comando ${cmd} nao suportado pelo duble`);
             if (Number(numkeys) !== 0) throw new Error(`TV30ESQUEMA ${nome}: chamada com numkeys ${numkeys}`);
@@ -71,13 +73,13 @@ export function createFakeRedis() {
         },
     };
 
-    // pares campo valor a partir de args[i]
+    // Field and value pairs from args[i].
     const paresDe = (a: string[], i = 0): Record<string, string> => {
         const h: Record<string, string> = {};
         for (let k = i; k + 1 < a.length; k += 2) h[a[k]] = a[k + 1];
         return h;
     };
-    // efeito das funcoes tv30 que o tv3ws chama (infra/redis/funcoes.lua)
+    // Effect of the tv30 functions tv3ws calls (infra/redis/funcoes.lua).
     const funcoes: Record<string, (a: string[]) => unknown> = {
         tv30_sessao_usuario: ([v]) => { store.set('session:current-user', v); return 1; },
         tv30_sessao_servico_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
@@ -142,7 +144,8 @@ export function createFakeRedis() {
             down = v;
             singleDown = v && scope === 'all';
         },
-        // mensagem = recusa da funcao como o Redis a manda; undefined = volta ao normal
+        // message = refusal of the function as Redis sends it; undefined goes
+        // back to normal.
         recusar(nome: string, mensagem?: string) {
             if (mensagem === undefined) recusas.delete(nome);
             else recusas.set(nome, mensagem);

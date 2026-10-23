@@ -33,7 +33,7 @@ export type UsersIdList = {
 }
 
 
-// ABNT NBR 25608 — Tabela 7: atributos basicos do perfil do telespectador
+// Table 7: basic attributes of the viewer profile.
 export type UserAttributes = {
     id: string,
     nickname: string,
