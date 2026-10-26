@@ -17,8 +17,8 @@ export function base64UrlDecode(str: string): Buffer<ArrayBufferLike> {
     return Buffer.from(str, 'base64');
 }
 
-// Comparacao de segredo em tempo constante. Tamanho diferente e falha sem comparar (timingSafeEqual
-// lancaria); o tamanho nao e segredo: o do refresh token e o do hash do desafio sao fixos.
+// Constant-time comparison of secrets. A different length fails without
+// comparing (timingSafeEqual would throw).
 export function safeEqual(a: Buffer<ArrayBufferLike>, b: Buffer<ArrayBufferLike>): boolean {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
 }

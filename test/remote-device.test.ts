@@ -1,7 +1,8 @@
-// Registro e remocao de remote-device (C.6.15.2, C.6.15.3) com Redis, core e MQTT por dubles. Com o Redis
-// fora, 404 {error:200} sem porta aberta nem registro pela metade; o descadastro fecha as portas; porta
-// sorteada ocupada sorteia outra. Esquema dos pontos de entrada: wss:// no do dispositivo remoto, com o
-// certificado do receptor; ws:// no local.
+// Registration and removal of a remote device (C.6.15.2, C.6.15.3) with
+// Redis, core and MQTT by doubles. With Redis down, 404 {error:200} with no
+// port open and no half registration; deregistration closes the ports; a
+// drawn port in use draws another. Scheme of the entry points: wss:// for
+// the remote device, with the receiver certificate; ws:// for the local one.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -15,7 +16,8 @@ import express from 'express';
 import { WebSocket } from 'ws';
 import { createFakeRedis } from './helpers/fake-redis';
 
-// registro em ws:// aqui, independente do certificado da maquina (o teste de TLS o liga)
+// Registration on ws:// here, whatever the certificate of the machine (the
+// TLS test turns it on).
 process.env.TV3WS_WS_TLS = 'false';
 
 const fake = createFakeRedis();
@@ -36,8 +38,8 @@ stub('core', { default: fakeCore });
 stub('mqtt-client', {
     default: {
         publish(t: string, m: string) { published.push([t, m]); },
-        addTopicHandler() { /* nada */ },
-        removeTopicHandler() { /* nada */ },
+        addTopicHandler() { /* nothing */ },
+        removeTopicHandler() { /* nothing */ },
         parseTopic(t: string) { return t; },
     },
     TOPICS: { devices: 'aop/devices', app_doc: 'aop/:serviceId/:appId/doc' },
@@ -56,8 +58,8 @@ const { apiNotFound, errorHandler } = require('../src/util') as typeof import('.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const tls = require('../src/tls') as typeof import('../src/tls');
 
-// porta livre, escutando como o ponto de entrada (sem host: todas as
-// interfaces), para o EADDRINUSE acontecer igual no Windows e no Linux
+// A free port, listening as the entry point (no host: every interface), so
+// that EADDRINUSE happens the same way on Windows and Linux.
 async function occupy(port = 0): Promise<net.Server> {
     const s = net.createServer();
     await new Promise<void>((resolve, reject) => { s.once('error', reject); s.listen(port, () => resolve()); });
@@ -71,11 +73,12 @@ async function freePort(): Promise<number> {
     await release(s);
     return p;
 }
-// duas portas livres e consecutivas (P, P+1), para o teste do sorteio
+// Two free consecutive ports (P, P+1), for the draw test.
 async function freePortPair(): Promise<number> {
     for (let i = 0; i < 20; i++) {
         const p = await freePort();
-        try { await release(await occupy(p + 1)); return p; } catch { /* P+1 ocupada: outra */ }
+        // P+1 in use: try another.
+        try { await release(await occupy(p + 1)); return p; } catch { }
     }
     throw new Error('sem par de portas livres');
 }
@@ -86,7 +89,7 @@ function listening(port: number): Promise<boolean> {
         c.once('error', () => resolve(false));
     });
 }
-// faixa do sorteio (WS_PORT_MIN..WS_PORT_MAX, lida a cada abertura)
+// Range of the draw (WS_PORT_MIN..WS_PORT_MAX, read on every opening).
 function portRange(min: number, max = min): void {
     process.env.WS_PORT_MIN = String(min);
     process.env.WS_PORT_MAX = String(max);
@@ -99,7 +102,8 @@ let wsPort = 0;
 before(async () => {
     wsPort = await freePort();
     portRange(wsPort);
-    // a montagem do app.ts: a 100.0 chega da borda com o prefixo /v100.0
+    // The mounting of app.ts: 100.0 arrives from the edge with the /v100.0
+    // prefix.
     const app = express();
     app.use(express.json());
     app.use('/tv3', basic);
@@ -130,7 +134,8 @@ const expectError = (r: { status: number; json: any }, code: number) => {
     assert.equal(r.json?.error, code, JSON.stringify(r.json));
 };
 const BODY = { deviceClass: 'teste', supportedTypes: ['light'] };
-// como a borda repassa a 100.0: caminho /v100.0 e a versao negociada no cabecalho
+// As the edge passes 100.0 on: path /v100.0 and the negotiated version in
+// the header.
 const V100 = { 'X-TV30-API-Version': '100.0' };
 const call100 = (method: string, route: string) => call(method, route, undefined, V100, BASE_V100);
 
@@ -178,9 +183,10 @@ test('EADDRINUSE na porta sorteada: sorteia outra, sem derrubar o processo', asy
     const p = await freePortPair();
     const busy = await occupy(p);
     try {
-        portRange(p, p + 2);   // sorteio em [P, P+2): P ou P+1
+        // Draw in [P, P+2): P or P+1.
+        portRange(p, p + 2);
         let calls = 0;
-        // 1o sorteio cai na porta ocupada (P), os seguintes em P+1
+        // The first draw falls on the port in use (P), the next ones on P+1.
         t.mock.method(Math, 'random', () => (calls++ === 0 ? 0 : 0.99));
         const r = await call('POST', '/', BODY);
         t.mock.restoreAll();
@@ -210,7 +216,7 @@ test(`todas as ${LISTEN_ATTEMPTS} tentativas em porta ocupada: 404 {error:200}, 
     } finally {
         await release(busy);
     }
-    // o processo seguiu de pe: o proximo registro numa porta livre funciona
+    // The process stayed up: the next registration on a free port works.
     portRange(wsPort);
     const r = await call('POST', '/', BODY);
     assert.equal(r.status, 200, JSON.stringify(r.json));
@@ -232,7 +238,7 @@ test('ponto de entrada local: a listagem 2.0 abre; o descadastro fecha as duas p
     const mine = list.json.devices.find((d: { handle: string }) => d.handle === handle);
     assert.equal(mine.url, `ws://localhost:${localPort}`);
     assert.equal(await listening(localPort), true);
-    // listagem repetida reusa o mesmo ponto de entrada
+    // A repeated listing reuses the same entry point.
     const again = await call('GET', '/devices/teste');
     assert.equal(again.json.devices.find((d: { handle: string }) => d.handle === handle).url, mine.url);
 
@@ -279,7 +285,8 @@ test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', asyn
     const handle: string = r.json.handle;
 
     const p = await freePortPair();
-    portRange(p, p + 2);   // sem trava, o segundo pedido abriria a outra porta
+    // Without the lock, the second request would open the other port.
+    portRange(p, p + 2);
     const [a, b] = await Promise.all([
         call100('GET', `/device/${handle}`),
         call100('GET', `/device/${handle}`),
@@ -303,18 +310,20 @@ test('a rota escolhe o codigo, nao o X-TV30-API-Version: /v100.0 lista so handle
     const handle: string = r.json.handle;
     portRange(localPort);
 
-    // /v100.0 sem o cabecalho: o codigo da 100.0, sem abrir ponto de entrada
+    // /v100.0 without the header: the code of 100.0, without opening an entry
+    // point.
     const handles = await call('GET', '/devices/teste', undefined, {}, BASE_V100);
     assert.equal(handles.status, 200, JSON.stringify(handles.json));
     assert.deepEqual(handles.json.devices.find((d: { handle: string }) => d.handle === handle), { handle, supportedTypes: ['light'] });
     assert.equal(await listening(localPort), false);
 
-    // caminho publico com o cabecalho da 100.0: o codigo da 2.0 (C.6.15.5, com url)
+    // Public path with the header of 100.0: the code of 2.0 (C.6.15.5, with
+    // url).
     const withUrl = await call('GET', '/devices/teste', undefined, V100);
     assert.equal(withUrl.status, 200, JSON.stringify(withUrl.json));
     assert.equal(withUrl.json.devices.find((d: { handle: string }) => d.handle === handle).url, `ws://localhost:${localPort}`);
 
-    // as rotas por handle so existem sob /v100.0
+    // The routes by handle exist only under /v100.0.
     for (const m of ['GET', 'DELETE']) expectError(await call(m, `/device/${handle}`, undefined, V100), 100);
     expectError(await call100('GET', '/device/nao-existe'), 101);
 
@@ -322,7 +331,8 @@ test('a rota escolhe o codigo, nao o X-TV30-API-Version: /v100.0 lista so handle
     assert.equal(await listening(localPort), false);
 });
 
-// certificado autoassinado como o do tls-init (infra/edgegateway/tls-init.sh); sem openssl, undefined
+// Self-signed certificate like the one of tls-init
+// (infra/edgegateway/tls-init.sh); without openssl, undefined.
 function selfSignedCert(): string | undefined {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv30-ws-tls-'));
     try {
@@ -375,12 +385,14 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
         assert.equal(ep.json.url, `ws://localhost:${nextPort}`);
         (await connects(ep.json.url)).close();
 
-        // o aparelho que confia no serverCert conecta ao wss:// do registro
+        // The device that trusts the serverCert connects to the wss:// of the
+        // registration.
         const device = await connects(r.json.url, cert);
         assert.equal((await call('DELETE', `/${handle}`)).status, 204);
         await closed(device);
 
-        // TV3WS_WS_TLS=false vale so para o ponto de entrada do dispositivo remoto
+        // TV3WS_WS_TLS=false applies only to the entry point of the remote
+        // device.
         process.env.TV3WS_WS_TLS = 'false';
         portRange(devPort);
         const plain = await call('POST', '/', BODY);
@@ -395,7 +407,7 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
 });
 
 after(async () => {
-    // dispositivos que sobrarem de um teste que falhou: o descadastro fecha
-    // as portas e o processo pode sair
+    // Devices left by a failed test: deregistration closes the ports and the
+    // process can exit.
     for (const d of manager.getDevicesByClass('teste')) await manager.removeRemoteDevice(d.getHandle());
 });

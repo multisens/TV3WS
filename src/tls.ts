@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 
-// Certificado autoassinado do receptor (C.4.1.1 permite), o mesmo da borda: HTTPS, serverCert do
-// pareamento (Tabela C.4) e wss:// do ponto de entrada do dispositivo remoto (Tabela C.76). Fonte:
-// TV30_TLS_DIR (key.pem, cert.pem), senao HTTPS_KEY/HTTPS_CERT em base64; sem nenhum, so HTTP e ws://.
+// Self-signed certificate of the receiver: HTTPS, serverCert of the pairing
+// (Table C.4) and wss:// of the entry point of the remote device (Table
+// C.76). Source: TV30_TLS_DIR (key.pem, cert.pem), otherwise HTTPS_KEY and
+// HTTPS_CERT in base64; without any, only HTTP and ws://.
 export type TlsMaterial = { key: Buffer; cert: Buffer; source: string };
 
 export function loadTls(env: NodeJS.ProcessEnv = process.env): TlsMaterial | undefined {
@@ -15,7 +16,9 @@ export function loadTls(env: NodeJS.ProcessEnv = process.env): TlsMaterial | und
                 cert: fs.readFileSync(path.join(dir, 'cert.pem')),
                 source: `TV30_TLS_DIR (${dir})`,
             };
-        } catch { /* cai para as variaveis */ }
+        } catch {
+            // Falls back to the variables.
+        }
     }
     const key = env.HTTPS_KEY?.trim();
     const cert = env.HTTPS_CERT?.trim();
@@ -29,14 +32,14 @@ export function tlsMaterial(): TlsMaterial | undefined {
     return cached;
 }
 
-// PEM em base64: a Tabela C.4 so diz "<X.509 cert>".
+// PEM in base64 (Table C.4: "<X.509 cert>").
 export function serverCert(): string | undefined {
     const t = tlsMaterial();
     return t ? t.cert.toString('base64') : undefined;
 }
 
-// TLS do ponto de entrada do dispositivo remoto. TV3WS_WS_TLS=false o abre em ws://, para demonstracao com
-// aparelho que nao confia no certificado autoassinado. O ponto de entrada local sai sempre em ws://.
+// TLS of the entry point of the remote device. TV3WS_WS_TLS=false opens it
+// as ws://. The local entry point is always ws://.
 export function wsTls(env: NodeJS.ProcessEnv = process.env): boolean {
     const off = ['false', '0'].includes((env.TV3WS_WS_TLS ?? '').trim().toLowerCase());
     return !off && tlsMaterial() !== undefined;

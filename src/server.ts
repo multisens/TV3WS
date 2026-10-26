@@ -24,7 +24,7 @@ whenRedisReady('clients:authorized a partir de client:*', async () => {
 });
 connectRedis();
 
-// /manifest (C.3.4). Porta da borda invalida derruba o processo no boot.
+// /manifest (C.3.4). An invalid edge port stops the process at startup.
 import { loadAdvertisedEndpoint, registerManifest } from './manifest';
 registerManifest(app, loadAdvertisedEndpoint());
 
@@ -51,7 +51,7 @@ if (tls) {
     logger.info('[boot] sem certificado (TV30_TLS_DIR, HTTPS_KEY/HTTPS_CERT) — HTTPS desabilitado (somente HTTP)');
 }
 
-// O node como PID 1 do container ignoraria o SIGTERM, e o docker stop esperaria o SIGKILL.
+// node as PID 1 of the container would ignore SIGTERM.
 process.once('SIGTERM', () => process.exit(143));
 process.once('SIGINT', () => process.exit(130));
 

@@ -18,9 +18,9 @@ type TokenResponse = {
     serverCert?: string
 };
 
-// Classe definida na autorizacao: quem pede pareamento e nao local; Origin em origins:associated e
-// associado; o resto, autonomo. Endereco nao serve: em container, equipamento e rede domestica chegam
-// iguais. Limitacao conhecida, a mesma da borda: o Origin e forjavel fora do navegador.
+// Class decided at authorization: a client that asks for pairing is
+// non-local; one with an Origin in origins:associated is associated; any
+// other is stand-alone.
 async function classifyClient(req: Request, pm: string | undefined): Promise<ClientClass> {
     if (pm !== undefined) return 'non-local';
 
@@ -32,8 +32,8 @@ async function classifyClient(req: Request, pm: string | undefined): Promise<Cli
     return 'local-autonomous';
 }
 
-// Vazio ou so espacos vale como ausente (105, Tabelas C.3 e C.4): a string vazia passaria pelos testes
-// de undefined sem cair em ramo nenhum. Valor nao vazio segue sem trim; pm= vazio classifica local.
+// An empty or blank value counts as absent (105, Tables C.3 and C.4). A
+// non-empty value is kept untrimmed; an empty pm= classifies as local.
 function queryParam(req: Request, name: string): string | undefined {
     const value = req.query[name];
     if (typeof value === 'string' && value.trim() === '') return undefined;
@@ -50,8 +50,7 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     const clientClass = await classifyClient(req, pm);
     const local = clientClass !== 'non-local';
 
-    // o associado nao porta credencial (C.4.1.1; Tabela C.3, 106). A borda tambem recusa o uso;
-    // aqui se impede que a credencial exista.
+    // The associated client gets no credential (C.4.1.1; Table C.3, 106).
     if (clientClass === 'local-associated') {
         returnError(res, 106, 'associated local clients do not obtain credentials (C.4.1.1); invoked from an associated local client');
         return;
@@ -61,7 +60,8 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
         return;
     }
 
-    // a reserva da camada grafica sai no fim do pedido, salvo se ja passou ao pop-up do pareamento
+    // The reservation of the graphics layer is released at the end of the
+    // request, unless it passed to the pairing pop-up.
     const reserva: { r?: Reserva } = {};
     try {
         await authorizeReserved(res, clientId, displayName, pm, key, clientClass, local, reserva);
@@ -70,7 +70,7 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     }
 }
 
-// O resto do /tv3/authorize, com a camada grafica ja reservada (ou o 103).
+// The rest of /tv3/authorize, with the graphics layer reserved (or 103).
 async function authorizeReserved(res: Response, clientId: string, displayName: string,
                                  pm: string, key: string, clientClass: ClientClass, local: boolean,
                                  reserva: { r?: Reserva }): Promise<void> {
@@ -98,8 +98,9 @@ async function authorizeReserved(res: Response, clientId: string, displayName: s
 
         const challenge = service.generateChallenge(client, secret!);
         if (pm == 'kex') {
-            // Tabela C.3, formato (3), e C.4.3.3 passo 1: no kex vai tambem "key", a chave parcial do
-            // servidor (ponto SEC 1 sem compressao em base64url, C.4.3.4)
+            // Table C.3, format (3), and C.4.3.3 step 1: for kex, "key" too,
+            // the partial key of the server (SEC 1 point without compression in
+            // base64url, C.4.3.4).
             res.status(200).json({
                 challenge,
                 key: base64UrlEncode(client.getECDHPublicKey())
@@ -138,11 +139,13 @@ function validateAuthorizeParameters(clientId: string, displayName: string, pm: 
     return true;
 }
 
-// Clientid ja usado da 101 para qualquer classe, sem pop-up (Tabela C.3; C.6.1.4.4): em clients:authorized,
-// em clients:blocked ou com registro client:{id}. Bloqueado tambem da 101 (nota da Tabela C.3); o 102 fica
-// para a recusa no pop-up. Quem perdeu o refresh token repete com clientid novo (C.6.1.4.5).
-// A tentativa pendente do nao local nao conta: o novo pedido a descarta e segue como novo.
-// Devolve o cliente autorizado (o nao local, ainda pendente) ou undefined, com o erro ja respondido.
+// A clientid already used gives 101 for any class, without a pop-up (Table
+// C.3; C.6.1.4.4): in clients:authorized, in clients:blocked or with a
+// client:{id} record. A blocked one also gives 101 (note of Table C.3); 102
+// is for a refusal in the pop-up. A pending attempt of a non-local client
+// does not count: the new request discards it and goes on as new. Returns
+// the authorized client (a non-local one still pending) or undefined, with
+// the error already answered.
 async function checkAuthorization(clientId: string, displayName: string, clientClass: ClientClass, res: Response,
                                   reserva: { r?: Reserva }): Promise<Client | undefined> {
     const status = await manager.clientIdStatus(clientId as string);
@@ -158,8 +161,9 @@ async function checkAuthorization(clientId: string, displayName: string, clientC
 
     manager.DiscardPending(clientId);
 
-    // 103 com a camada grafica ocupada (C.4.2.3, Tabela C.3), so para quem chegaria ao pop-up. Entre a
-    // reserva e a publicacao do sim/nao nao ha await: dois pedidos nao reservam juntos.
+    // 103 with the graphics layer busy (C.4.2.3, Table C.3), only for a request
+    // that would reach the pop-up. No await between the reservation and the
+    // publication of the yes/no: two requests do not reserve together.
     reserva.r = service.reservarCamada(clientId);
     if (!reserva.r) {
         returnError(res, 103, 'another authorization or pairing pop-up is on screen; try again later.');
@@ -168,12 +172,13 @@ async function checkAuthorization(clientId: string, displayName: string, clientC
 
     const authorized = await service.askAuthorization(displayName as string);
     if (!authorized) {
-        // a recusa e gravada na hora para as duas classes: o pareamento so comeca depois do sim (C.4.2.3)
+        // The refusal is stored at once, for both classes.
         await manager.BlockClient(clientId);
         returnError(res, 102, 'Viewer did not authorize the client.');
         return undefined;
     }
-    // o sim do nao local so e gravado quando o /tv3/token confere o desafio
+    // The yes of a non-local client is stored only when /tv3/token checks the
+    // challenge.
     if (clientClass === 'non-local') return manager.StartPairing(clientId);
     return manager.AuthorizeClient(clientId, clientClass);
 }
@@ -185,19 +190,21 @@ async function GETToken(req: Request, res: Response): Promise<void> {
     const challengeResponse = queryParam(req, 'challenge-response') as string;
     const refreshToken = queryParam(req, 'refresh-token') as string;
 
-    // Sem refresh-token vale a tentativa pendente do nao local, que so e gravada com o challenge-response
-    // conferido; com ele, so a autorizacao gravada.
+    // Without refresh-token, the pending attempt of a non-local client counts,
+    // stored only with the challenge-response checked; with it, only the stored
+    // authorization.
     const pending = clientId !== undefined && refreshToken === undefined ? manager.GetPendingClient(clientId) : undefined;
     if (clientId !== undefined && pending === undefined && !(await manager.isAuthorized(clientId))) {
         returnError(res, 102, `Client ${clientId} is not authorized.`);
         return;
     }
 
-    // a classe vem do registro feito na autorizacao, nao do endereco
+    // The class comes from the record made at authorization.
     const registered = clientId !== undefined ? pending ?? await manager.GetAuthorizedClient(clientId) : undefined;
     const local = registered !== undefined ? registered.isLocal() : true;
 
-    // Tabela C.4, 106: nem um registro client:{id} de classe associada recebe credencial
+    // Table C.4, 106: not even a client:{id} record of the associated class
+    // gets a credential.
     if (registered !== undefined && registered.getClass() === 'local-associated') {
         returnError(res, 106, 'associated local clients do not obtain credentials (C.4.1.1)');
         return;
@@ -208,8 +215,10 @@ async function GETToken(req: Request, res: Response): Promise<void> {
         return;
     }
 
-    // No challenge-response, o material do pareamento (de onde vem a chave da primeira resposta) ja saiu do
-    // cliente; se a gravacao da autorizacao ou a emissao falhar, ele volta e a tentativa segue aberta.
+    // With challenge-response, the pairing material (the source of the key of
+    // the first response) was already taken from the client; if storing the
+    // authorization or issuing fails, it is restored and the attempt stays
+    // open.
     const { client, pairing } = valid;
     let encr: Buffer<ArrayBufferLike> | undefined;
     let resp: TokenResponse;
@@ -226,11 +235,10 @@ async function GETToken(req: Request, res: Response): Promise<void> {
         if (!local && refreshToken === undefined && req.protocol == 'http') {
             logger.info(`First access of nom-local client ${clientId} send response encrypted`);
 
-            // o certificado do receptor, o mesmo da 44643
+            // The certificate of the receiver.
             resp.serverCert = serverCert();
 
-            // sem o material (nao deveria acontecer: este ramo so passa
-            // pelo challenge-response conferido), nada sai em claro
+            // Without the material, nothing goes out in clear text.
             const secret = pairing?.secret;
             if (secret === undefined) {
                 throw Error(`Client ${clientId} has no pairing key to encrypt the first-access response.`);
@@ -251,17 +259,19 @@ async function GETToken(req: Request, res: Response): Promise<void> {
         res.status(200).json(resp);
     }
 
-    // fim do pareamento: o challenge-response conferiu e a credencial saiu; fecha o pop-up (C.4.3.2, C.4.3.3)
+    // End of the pairing: the challenge-response matched and the credential
+    // went out; closes the pop-up (C.4.3.2, C.4.3.3).
     if (!refreshToken && challengeResponse) {
         service.endPairing(clientId);
     }
 }
 
-// Requisicao do /tv3/token conferida: o cliente e, quando ela veio por
-// challenge-response, o material do pareamento ja tirado dele.
+// A checked /tv3/token request: the client and, when it came by
+// challenge-response, the pairing material already taken from it.
 type ValidToken = { client: Client; pairing?: PairingMaterial };
 
-// Sincrona: da busca da tentativa pendente ate a retirada do material nao ha await.
+// Synchronous: no await from the lookup of the pending attempt to the
+// removal of the material.
 function validateTokenParameters(clientId: string, refreshToken: string, challengeResponse: string, registered: Client | undefined, local: boolean, protocol: string, res: Response): ValidToken | false {
     if (clientId === undefined || registered === undefined) {
         returnError(res, 105, 'Required header clientid not defined.');
@@ -288,14 +298,16 @@ function validateTokenParameters(clientId: string, refreshToken: string, challen
         return { client };
     }
 
-    // O challenge vale uma vez. Sem challenge pendente (pareamento concluido, cliente local, reinicio do
-    // tv3ws), 102, o mesmo do desafio errado (Tabela C.4).
+    // The challenge is valid once. Without a pending challenge (pairing
+    // concluded, local client, tv3ws restart), 102, the same as a wrong
+    // challenge (Table C.4).
     if (!client.hasPendingChallenge()) {
         returnError(res, 102, `No pending challenge for client ${clientId} (pairing already concluded or not started)`);
         return false;
     }
-    // challenge-response que nao decifra (padding PKCS#7 invalido) ou nao e texto (parametro repetido) tambem
-    // da 102: outro codigo distinguiria erro de padding de hash errado
+    // A challenge-response that does not decrypt (invalid PKCS#7 padding) or is
+    // not a single text (repeated parameter) also gives 102: another code would
+    // tell a padding error from a wrong hash.
     let response: Buffer<ArrayBufferLike>;
     try {
         if (typeof challengeResponse !== 'string') throw new TypeError('challenge-response is not a single value');
@@ -311,8 +323,9 @@ function validateTokenParameters(clientId: string, refreshToken: string, challen
         return false;
     }
 
-    // O material do pareamento sai no mesmo trecho sincrono da conferencia: dois /tv3/token simultaneos com o
-    // mesmo challenge-response nao passam os dois. A Tabela C.4 permite descartar a chave apos o primeiro acesso.
+    // The pairing material is taken in the same synchronous stretch as the
+    // check: two simultaneous /tv3/token calls with the same
+    // challenge-response do not both pass.
     return { client, pairing: client.takePairingMaterial() };
 }
 

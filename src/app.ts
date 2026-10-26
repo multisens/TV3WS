@@ -9,11 +9,13 @@ import userAPI from './api/user';
 import remoteDeviceAPI, { routerV100 as remoteDeviceV100API } from './api/remote-device';
 import sensoryEffectAPI from './api/sensory-effect';
 
-// Extensao do testbed (versao 100 em diante): a borda repassa no caminho /v<X.Y> + o publico.
+// Testbed extension (version 100 on): the edge passes it on under the path
+// /v<X.Y> followed by the public path.
 const V100 = '/v100.0/tv3';
 
-// A credencial e conferida na borda (edgegateway); aqui so se emite (client-identification).
-// O basic vem antes dos leitores de corpo para o 101 de JSON malformado levar API-Version (C.3.6.6).
+// No credential is checked here; client-identification only issues them.
+// basic comes before the body parsers, so that the 101 of a malformed JSON
+// carries API-Version (C.3.6.6).
 const app: Application = express();
 app.use('/tv3', basic);
 app.use(V100, basic);
@@ -27,16 +29,18 @@ app.use("/health", (req: Request, res: Response) => {
   });
 });
 app.use("/tv3/current-service/users", userAPI);
-app.use("/tv3/:serviceContextId/users", userAPI);   // atributos por contexto de serviço (C.6.14.2/C.6.14.5)
+// Attributes by service context (C.6.14.2, C.6.14.5).
+app.use("/tv3/:serviceContextId/users", userAPI);
 app.use("/tv3/remote-device", remoteDeviceAPI);
 app.use(`${V100}/remote-device`, remoteDeviceV100API);
 app.use("/tv3/sensory-effect-renderers", sensoryEffectAPI);
-// C.6.8 (/tv3/bind-context) e respondida pela borda.
+// C.6.8 (/tv3/bind-context) is not served here.
 app.use("/tv3", aopCommunicationAPI);
 app.use("/tv3", clientIdentificationAPI);
 
-// camada comum de erro (C.3.2): rota /tv3 nao mapeada -> erro 100 no
-// formato da norma; excecao nao tratada -> erro 200, nunca HTML.
+// Common error layer (C.3.2): an unmapped /tv3 route gives error 100 in the
+// format of the standard; an unhandled exception gives error 200, never
+// HTML.
 app.use("/tv3", apiNotFound);
 app.use(V100, apiNotFound);
 app.use(errorHandler);
