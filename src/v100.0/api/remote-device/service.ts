@@ -1,11 +1,8 @@
-import { ApiError } from '../../../util';
+import { ApiError, positiveIntFromEnv } from '../../../util';
 import { entryPointUrl, isEntryServerListening, localEntryPointUrl } from '../../modules/remote-device/entry-server';
 import { registries } from '../../modules/remote-device/manager';
 import { LocalClient } from '../../util/client';
 import { RegisterBody } from './schema';
-
-// Receiver limit on devices to register
-const MAX_REGISTRATIONS = parseInt(process.env.MAX_REGISTRATIONS || '32');
 
 // C.6.15.2, Table C.76: url only in the response of a new registration
 export type RegisterResponse = {
@@ -19,11 +16,15 @@ export type DeviceInfo = {
     supportedTypes: string[];
     paired: boolean;
     url: string;
-}
+};
+
 export type DeviceListResponse = {
     sequence: number;
     devices?: DeviceInfo[];
-}
+};
+
+// Receiver limit on devices to register
+const MAX_REGISTRATIONS = positiveIntFromEnv('MAX_REGISTRATIONS');
 
 // C.6.15.2: creates the registration and returns its handle and the URL of
 // its entry point
@@ -65,7 +66,7 @@ function removeDevice(handle: string): void {
 function listDevices(deviceClass: string, client: LocalClient): DeviceListResponse {
     const sequence = registries.getSequence(deviceClass);
     const connected = registries.getConnected(deviceClass);
-    
+
     const devices: DeviceInfo[] = [];
     for (const registry of connected) {
         const token = registries.addLocalEntryPoint(registry, client.clientId, client.clientType);
@@ -73,21 +74,19 @@ function listDevices(deviceClass: string, client: LocalClient): DeviceListRespon
             deviceId: registry.deviceId,
             supportedTypes: registry.getSupportedTypes(),
             paired: registry.isPaired(),
-            url: localEntryPointUrl(token)
+            url: localEntryPointUrl(token),
         });
     }
 
     if (devices.length > 0) {
         return {
             sequence: sequence,
-            devices: devices
-        }
+            devices: devices,
+        };
     }
-    else {
-        return {
-            sequence: sequence
-        }
-    }
+    return {
+        sequence: sequence,
+    };
 }
 
 export default { registerDevice, updateDevice, removeDevice, listDevices };

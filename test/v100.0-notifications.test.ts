@@ -15,6 +15,9 @@ import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
 process.env.SERVER_URL = 'localhost';
 process.env.WS_PORT_MIN = '46900';
 process.env.WS_PORT_MAX = '46999';
+process.env.LISTEN_ATTEMPTS = '10';
+process.env.MAX_REGISTRATIONS = '32';
+process.env.PING_INTERVAL_MS = '15000';
 
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();

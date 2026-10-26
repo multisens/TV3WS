@@ -10,6 +10,7 @@ import { AddressInfo } from 'net';
 import { Server } from 'http';
 import { createFakeRedis } from './helpers/fake-redis';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
+import './helpers/v100-env';
 
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();

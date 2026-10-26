@@ -3,20 +3,21 @@ import https from 'https';
 import { Server, Socket } from 'net';
 import { WebSocket, WebSocketServer } from 'ws';
 import core from '../../../core';
+import logger from '../../../logger';
 import { tlsMaterial, wsTls } from '../../../tls';
-import { ApiError } from '../../../util';
+import { ApiError, positiveIntFromEnv } from '../../../util';
 import { closeServer, listenOnFreePort } from '../../util/port';
 import { LocalEntryPoint, registries } from './manager';
 import Registry from './registry';
 
-const PING_INTERVAL_MS = parseInt(process.env.PING_INTERVAL_MS || '15000');
+type EntryKind = 'device' | 'local';
+
+const PING_INTERVAL_MS = positiveIntFromEnv('PING_INTERVAL_MS');
 const ENTRY_PATH = 'rd';
 const ENTRY_PREFIX = `/${ENTRY_PATH}/`;
 
 const wss = new WebSocketServer({ noServer: true });
 const alive = new WeakSet<WebSocket>();
-
-type EntryKind = 'device' | 'local';
 
 // Entry servers of the devices (C.6.15.2) and of the local clients
 // (C.6.15.5); the ports are undefined while the servers are not listening
@@ -45,15 +46,14 @@ export async function startEntryServer(): Promise<void> {
     });
     localPort = await listenOnFreePort(localServer);
 
-    console.log(`[v100.0 remote-device] entry servers listening on ports ${devicePort} (devices) and ${localPort} (local clients)`);
+    logger.info(`[v100.0 remote-device] entry servers listening on ports ${devicePort} (devices) and ${localPort} (local clients)`);
 
     pingTimer = setInterval(() => {
         for (const ws of wss.clients) {
             if (alive.has(ws)) {
                 alive.delete(ws);
                 ws.ping();
-            }
-            else {
+            } else {
                 ws.terminate();
             }
         }
@@ -116,8 +116,7 @@ function onUpgrade(kind: EntryKind, req: IncomingMessage, socket: Socket, head: 
         ws.on('pong', () => alive.add(ws));
         if (entryPoint.kind === 'device') {
             onDeviceConnection(entryPoint.registry, ws);
-        }
-        else {
+        } else {
             onClientConnection(entryPoint, ws);
         }
     });
@@ -132,7 +131,7 @@ function refuse(socket: Socket): void {
 function onDeviceConnection(registry: Registry, ws: WebSocket): void {
     registries.connect(registry, ws);
     ws.on('close', () => registries.disconnect(registry, ws));
-    ws.on('error', () => console.log(`Error on socket for device ${registry.handle}`));
+    ws.on('error', () => logger.error(`[v100.0 remote-device] error on the socket of device ${registry.handle}`));
     ws.on('message', (data, isBinary) => registries.forwardFromDevice(registry, ws, data, isBinary));
 }
 
@@ -140,6 +139,6 @@ function onClientConnection(entryPoint: LocalEntryPoint, ws: WebSocket): void {
     const registry = entryPoint.registry;
     registries.connectClient(entryPoint, ws);
     ws.on('close', () => registries.disconnectClient(registry, ws));
-    ws.on('error', () => console.log(`Error on socket of client ${entryPoint.clientId}`));
+    ws.on('error', () => logger.error(`[v100.0 remote-device] error on the socket of client ${entryPoint.clientId}`));
     ws.on('message', (data, isBinary) => registries.forwardFromClient(registry, ws, data, isBinary));
 }

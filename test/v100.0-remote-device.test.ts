@@ -16,6 +16,7 @@ process.env.TV3WS_WS_TLS = 'false';
 process.env.SERVER_URL = 'localhost';
 process.env.WS_PORT_MIN = '46800';
 process.env.WS_PORT_MAX = '46899';
+process.env.LISTEN_ATTEMPTS = '10';
 process.env.MAX_REGISTRATIONS = '3';
 process.env.PING_INTERVAL_MS = '100';
 
