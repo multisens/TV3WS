@@ -21,3 +21,12 @@ export function positiveIntFromEnv(name: string): number {
     }
     return value;
 }
+
+// Returns the environment variable; throws if it is missing or blank.
+export function stringFromEnv(name: string): string {
+    const value = process.env[name];
+    if (value === undefined || value.trim() === '') {
+        throw new Error(`${name} must be set`);
+    }
+    return value;
+}

@@ -3,7 +3,6 @@ import { base64UrlEncode, safeEqual } from '../../util';
 
 // Client classes (C.4.1.1), decided at authorization and written into the
 // credential.
-export const CLIENT_CLASSES = ['associated', 'standAlone', 'nonLocal'] as const;
 export type ClientClass = typeof CLIENT_CLASSES[number];
 
 // Ephemeral pairing material of a non-local client (C.4.3, C.6.1.2.2):
@@ -13,10 +12,15 @@ export type PairingMaterial = {
     challenge?: Buffer<ArrayBufferLike>;
     secret?: Buffer<ArrayBufferLike>;
     ECDHKey?: {
-        privateKey: ECDH,
-        publicKey: Buffer<ArrayBufferLike>
+        privateKey: ECDH;
+        publicKey: Buffer<ArrayBufferLike>;
     };
 };
+
+export const CLIENT_CLASSES = ['associated', 'standAlone', 'nonLocal'] as const;
+
+// Size of the refresh token, in random bytes.
+const REFRESH_TOKEN_BYTES = 16;
 
 export default class Client {
     protected id: string;
@@ -26,9 +30,9 @@ export default class Client {
     protected challenge?: Buffer<ArrayBufferLike>;
     protected secret?: Buffer<ArrayBufferLike>;
     protected ECDHKey?: {
-        privateKey: ECDH,
-        publicKey: Buffer<ArrayBufferLike>
-    }
+        privateKey: ECDH;
+        publicKey: Buffer<ArrayBufferLike>;
+    };
     protected accessToken?: string;
 
     constructor(id: string, clientClass: ClientClass = 'standAlone') {
@@ -53,7 +57,9 @@ export default class Client {
     // not restored.
     public restore(refreshToken: string, accessToken?: string): void {
         this.refreshToken = refreshToken;
-        if (accessToken) this.accessToken = accessToken;
+        if (accessToken) {
+            this.accessToken = accessToken;
+        }
     }
 
     public getRefreshToken(): string {
@@ -68,11 +74,13 @@ export default class Client {
     // Constant time, and only text is valid: ?refresh-token=a&refresh-token=b
     // arrives as a list.
     public validateRefreshToken(refreshToken: string): boolean {
-        if (typeof refreshToken !== 'string') return false;
+        if (typeof refreshToken !== 'string') {
+            return false;
+        }
         return safeEqual(Buffer.from(this.refreshToken, 'utf8'), Buffer.from(refreshToken, 'utf8'));
     }
 
-    public setChallenge(hash: Buffer<ArrayBufferLike>) {
+    public setChallenge(hash: Buffer<ArrayBufferLike>): void {
         this.challenge = hash;
     }
 
@@ -105,29 +113,32 @@ export default class Client {
         this.ECDHKey = material.ECDHKey;
     }
 
-    public setSecret(key: Buffer<ArrayBufferLike>) {
+    public setSecret(key: Buffer<ArrayBufferLike>): void {
         this.secret = key;
     }
 
     public getSecret(): Buffer<ArrayBufferLike> {
-        return this.secret as Buffer<ArrayBufferLike>;
+        if (this.secret === undefined) {
+            throw Error(`Client ${this.id} has no pairing secret.`);
+        }
+        return this.secret;
     }
 
-    public setECDHKeys(privateKey: ECDH, publicKey: Buffer<ArrayBufferLike>) {
+    public setECDHKeys(privateKey: ECDH, publicKey: Buffer<ArrayBufferLike>): void {
         this.ECDHKey = {
             privateKey: privateKey,
-            publicKey: publicKey
-        }
+            publicKey: publicKey,
+        };
     }
 
     public getECDHPublicKey(): Buffer<ArrayBufferLike> {
-        if (this.ECDHKey === undefined)
+        if (this.ECDHKey === undefined) {
             throw Error(`Client ${this.id} has no ECDH key pair.`);
-
-        return this.ECDHKey?.publicKey;
+        }
+        return this.ECDHKey.publicKey;
     }
 
-    public setAccessToken(token: string) {
+    public setAccessToken(token: string): void {
         this.accessToken = token;
     }
 
@@ -136,11 +147,14 @@ export default class Client {
     }
 
     public getAccessToken(): string {
-        return this.accessToken as string;
+        if (this.accessToken === undefined) {
+            throw Error(`Client ${this.id} has no access token.`);
+        }
+        return this.accessToken;
     }
 
     protected createRefreshToken(): string {
-        return base64UrlEncode(randomBytes(16));
+        return base64UrlEncode(randomBytes(REFRESH_TOKEN_BYTES));
     }
 }
 

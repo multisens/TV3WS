@@ -12,6 +12,7 @@ import { Server } from 'http';
 import { randomUUID, randomBytes, createECDH, createHash, createCipheriv, createDecipheriv } from 'crypto';
 import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
+import './helpers/jwt-env';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
 
 // --- doubles -----------------------------------------------------------------

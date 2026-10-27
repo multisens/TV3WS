@@ -14,6 +14,7 @@ import { Server } from 'http';
 import { randomUUID, randomBytes, createHash, createCipheriv, createDecipheriv, createECDH } from 'crypto';
 import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
+import './helpers/jwt-env';
 
 // --- doubles -----------------------------------------------------------------
 const fake = createFakeRedis();
@@ -167,8 +168,8 @@ test('local associado (Origin em origins:associated): 106 em /authorize, sem pop
 
 test('registro client:{id} de classe associada: /token da 106', async () => {
     const cid = randomUUID();
-    await manager.AuthorizeClient(cid, 'associated');
-    const rt = (await manager.GetAuthorizedClient(cid)).getRefreshToken();
+    await manager.authorizeClient(cid, 'associated');
+    const rt = (await manager.getAuthorizedClient(cid)).getRefreshToken();
     expectError(await get('/token', { clientid: cid, 'refresh-token': rt }), 106);
 });
 
@@ -268,7 +269,7 @@ test('bloquear um autorizado: sai de clients:authorized, /token recusa (102) e o
     const first = await authorize(cid);
     assert.equal(first.status, 200);
 
-    await manager.BlockClient(cid);
+    await manager.blockClient(cid);
     assert.ok(!members('clients:authorized').includes(cid));
     assert.ok(members('clients:blocked').includes(cid));
     expectError(await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken }), 102);
@@ -478,7 +479,7 @@ test('gravacao da autorizacao recusada no /tv3/token: 404 {error:200} sem creden
         console.error = errorOrig;
     }
     notStored(p.cid);
-    assert.equal(manager.GetPendingClient(p.cid)?.hasPendingChallenge(), true);
+    assert.equal(manager.getPendingClient(p.cid)?.hasPendingChallenge(), true);
 
     const ok = await tokenByChallenge(p);
     assert.equal(ok.status, 200);
@@ -560,9 +561,9 @@ for (const pm of ['qrcode', 'kex'] as const) {
         const body = JSON.parse(aes(false, p.secret, first.raw).toString('utf8'));
 
         // The pairing material left the client.
-        const client = await manager.GetAuthorizedClient(p.cid);
+        const client = await manager.getAuthorizedClient(p.cid);
         assert.equal(client.hasPendingChallenge(), false);
-        assert.equal(client.getSecret(), undefined);
+        assert.throws(() => client.getSecret(), /no pairing secret/);
         assert.equal(client.getChallenge(), undefined);
         if (pm === 'kex') assert.throws(() => client.getECDHPublicKey(), /no ECDH key pair/);
 
@@ -753,7 +754,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
             }
         }
         // The pairing stays open: the right solution concludes it (once).
-        assert.equal(manager.GetPendingClient(p.cid)?.hasPendingChallenge(), true);
+        assert.equal(manager.getPendingClient(p.cid)?.hasPendingChallenge(), true);
         const ok = await tokenByChallenge(p);
         assert.equal(ok.status, 200);
         assert.equal(typeof JSON.parse(aes(false, p.secret, ok.raw).toString('utf8')).accessToken, 'string');

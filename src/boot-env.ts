@@ -5,6 +5,7 @@ const REQUIRED_ENV = [
     'MQTT_HOST',
     'REDIS_HOST',
     'JWT_SECRET',
+    'JWT_ISSUER',
     'USER_THUMBS',
     'HTTP_PORT',
     'HTTPS_PORT',
