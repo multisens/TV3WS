@@ -167,7 +167,7 @@ test('local associado (Origin em origins:associated): 106 em /authorize, sem pop
 
 test('registro client:{id} de classe associada: /token da 106', async () => {
     const cid = randomUUID();
-    await manager.AuthorizeClient(cid, 'local-associated');
+    await manager.AuthorizeClient(cid, 'associated');
     const rt = (await manager.GetAuthorizedClient(cid)).getRefreshToken();
     expectError(await get('/token', { clientid: cid, 'refresh-token': rt }), 106);
 });
@@ -279,8 +279,8 @@ test('cliente so com client:{id}, fora de clients:authorized: reuso da 101 e o b
     viewerAnswer = true;
     const legacy = randomUUID();
     const legacyBlocked = randomUUID();
-    await fakeRedis.hset(`client:${legacy}`, { class: 'local-autonomous', refreshToken: 'rt-antigo' });
-    await fakeRedis.hset(`client:${legacyBlocked}`, { class: 'local-autonomous', refreshToken: 'rt-antigo-2' });
+    await fakeRedis.hset(`client:${legacy}`, { class: 'standAlone', refreshToken: 'rt-antigo' });
+    await fakeRedis.hset(`client:${legacyBlocked}`, { class: 'standAlone', refreshToken: 'rt-antigo-2' });
     await fakeRedis.sadd('clients:blocked', legacyBlocked);
 
     assert.equal(await popUpsDuring(async () => { expectError(await authorize(legacy), 101); }), 0);
@@ -323,7 +323,7 @@ test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das func
 test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora de clients:authorized', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
-    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: client:x campo class: deve ser um de local-associated, local-autonomous, non-local';
+    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: client:x campo class: deve ser um de associated, standAlone, nonLocal';
     fake.recusar('tv30_cliente_autoriza', msg);
     const errorOrig = console.error;
     console.error = () => undefined;
@@ -422,10 +422,10 @@ for (const pm of ['qrcode', 'kex'] as const) {
         assert.equal(ok.status, 200);
         assert.equal(typeof JSON.parse(aes(false, p2!.secret, ok.raw).toString('utf8')).accessToken, 'string');
         assert.ok(members('clients:authorized').includes(p.cid));
-        assert.equal((store.get(`client:${p.cid}`) as Record<string, string>).class, 'non-local');
+        assert.equal((store.get(`client:${p.cid}`) as Record<string, string>).class, 'nonLocal');
         const autoriza = fake.fcalls.filter(c => c[0] === 'tv30_cliente_autoriza');
         assert.equal(autoriza.length, 1);
-        assert.deepEqual(autoriza[0].slice(1, 4), [p.cid, 'class', 'non-local']);
+        assert.deepEqual(autoriza[0].slice(1, 4), [p.cid, 'class', 'nonLocal']);
     });
 
     test(`pm=${pm}: pareamento concluido: reuso do clientid da 101 sem pop-up, com ou sem pm`, async () => {
@@ -549,7 +549,7 @@ test('/tv3/authorize com pm vazio: vale como ausente, e o cliente se classifica 
     const r = await getRaw('/authorize', `clientid=${cid}&display-name=x&pm=`);
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(typeof r.json.refreshToken, 'string');
-    assert.equal((store.get(`client:${cid}`) as Record<string, string>).class, 'local-autonomous');
+    assert.equal((store.get(`client:${cid}`) as Record<string, string>).class, 'standAlone');
 });
 
 for (const pm of ['qrcode', 'kex'] as const) {
@@ -649,7 +649,7 @@ test('Client.validateRefreshToken: igual vale, diferente ou de outro tamanho nao
 });
 
 test('Client.validateChallenge: compara bytes; tamanho diferente ou sem challenge e falha; tempo constante', () => {
-    const c = new ClientClass(randomUUID(), 'non-local');
+    const c = new ClientClass(randomUUID(), 'nonLocal');
     const h = sha(randomBytes(16));
     assert.equal(c.validateChallenge(Buffer.from(h)), false, 'sem challenge guardado');
     c.setChallenge(Buffer.from(h));

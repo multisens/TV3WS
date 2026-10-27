@@ -1,6 +1,6 @@
 import * as dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
-import Client, { ClientClass } from './client';
+import Client, { ClientClass, isClientClass } from './client';
 import { execOrThrow } from '../../util/redis-result';
 dotenv.config();
 
@@ -76,7 +76,7 @@ export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
     return 'new';
 }
 
-export async function AuthorizeClient(id: string, clientClass: ClientClass = 'local-autonomous'): Promise<Client> {
+export async function AuthorizeClient(id: string, clientClass: ClientClass = 'standAlone'): Promise<Client> {
     const client = new Client(id, clientClass);
     await funcoes.clienteAutoriza(id, clientFields(client));
     authorizedClients.set(id, client);
@@ -86,7 +86,7 @@ export async function AuthorizeClient(id: string, clientClass: ClientClass = 'lo
 // The "yes" of a non-local client: nothing goes to Redis before the pairing
 // completes (C.4.2.3).
 export function StartPairing(id: string): Client {
-    const client = new Client(id, 'non-local');
+    const client = new Client(id, 'nonLocal');
     pendingClients.set(id, client);
     return client;
 }
@@ -148,7 +148,10 @@ export async function GetAuthorizedClient(id: string): Promise<Client> {
 
     const stored = await redis.hgetall(clientKey(id));
     if (stored && stored.refreshToken) {
-        const client = new Client(id, (stored.class as ClientClass) || 'local-autonomous');
+        if (!isClientClass(stored.class)) {
+            throw Error(`Client ${id} has an invalid class in Redis: '${stored.class}'.`);
+        }
+        const client = new Client(id, stored.class);
         client.restore(stored.refreshToken, stored.accessToken);
         authorizedClients.set(id, client);
         return client;

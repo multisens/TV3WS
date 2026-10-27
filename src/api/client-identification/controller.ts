@@ -22,14 +22,14 @@ type TokenResponse = {
 // non-local; one with an Origin in origins:associated is associated; any
 // other is stand-alone.
 async function classifyClient(req: Request, pm: string | undefined): Promise<ClientClass> {
-    if (pm !== undefined) return 'non-local';
+    if (pm !== undefined) return 'nonLocal';
 
     const origin = req.get('Origin');
     if (origin) {
         const scid = await redis.hget('origins:associated', origin);
-        if (scid !== null) return 'local-associated';
+        if (scid !== null) return 'associated';
     }
-    return 'local-autonomous';
+    return 'standAlone';
 }
 
 // An empty or blank value counts as absent (105, Tables C.3 and C.4). A
@@ -48,10 +48,10 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
     const pm = queryParam(req, 'pm') as string;
     const key = queryParam(req, 'key') as string;
     const clientClass = await classifyClient(req, pm);
-    const local = clientClass !== 'non-local';
+    const local = clientClass !== 'nonLocal';
 
     // The associated client gets no credential (C.4.1.1; Table C.3, 106).
-    if (clientClass === 'local-associated') {
+    if (clientClass === 'associated') {
         returnError(res, 106, 'associated local clients do not obtain credentials (C.4.1.1); invoked from an associated local client');
         return;
     }
@@ -179,7 +179,7 @@ async function checkAuthorization(clientId: string, displayName: string, clientC
     }
     // The yes of a non-local client is stored only when /tv3/token checks the
     // challenge.
-    if (clientClass === 'non-local') return manager.StartPairing(clientId);
+    if (clientClass === 'nonLocal') return manager.StartPairing(clientId);
     return manager.AuthorizeClient(clientId, clientClass);
 }
 
@@ -205,7 +205,7 @@ async function GETToken(req: Request, res: Response): Promise<void> {
 
     // Table C.4, 106: not even a client:{id} record of the associated class
     // gets a credential.
-    if (registered !== undefined && registered.getClass() === 'local-associated') {
+    if (registered !== undefined && registered.getClass() === 'associated') {
         returnError(res, 106, 'associated local clients do not obtain credentials (C.4.1.1)');
         return;
     }

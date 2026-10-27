@@ -3,7 +3,8 @@ import { base64UrlEncode, safeEqual } from '../../util';
 
 // Client classes (C.4.1.1), decided at authorization and written into the
 // credential.
-export type ClientClass = 'local-associated' | 'local-autonomous' | 'non-local';
+export const CLIENT_CLASSES = ['associated', 'standAlone', 'nonLocal'] as const;
+export type ClientClass = typeof CLIENT_CLASSES[number];
 
 // Ephemeral pairing material of a non-local client (C.4.3, C.6.1.2.2):
 // symmetric key, challenge and ECDH pair (pm=kex), valid until the
@@ -30,7 +31,7 @@ export default class Client {
     }
     protected accessToken?: string;
 
-    constructor(id: string, clientClass: ClientClass = 'local-autonomous') {
+    constructor(id: string, clientClass: ClientClass = 'standAlone') {
         this.id = id;
         this.clientClass = clientClass;
         this.refreshToken = this.createRefreshToken();
@@ -45,7 +46,7 @@ export default class Client {
     }
 
     public isLocal(): boolean {
-        return this.clientClass !== 'non-local';
+        return this.clientClass !== 'nonLocal';
     }
 
     // Rebuilds a client from Redis; the pairing material is ephemeral and is
@@ -141,4 +142,9 @@ export default class Client {
     protected createRefreshToken(): string {
         return base64UrlEncode(randomBytes(16));
     }
+}
+
+// Whether the value is one of the client classes.
+export function isClientClass(value: unknown): value is ClientClass {
+    return CLIENT_CLASSES.some(c => c === value);
 }
