@@ -67,14 +67,7 @@ export default class RemoteDevice {
     this.handle = handle;
     this.wss = wss;
 
-    this.capabilities = [];
-    for (const sType of this.supportedTypes) {
-      const capability: DeviceCapabilities = {
-        effectType: sType as EffectType,
-        state: "stopped",
-      };
-      this.capabilities.push(capability);
-    }
+    this.capabilities = capabilitiesOf(this.supportedTypes);
 
     this.subscribed = false;
     this.bridge = false;
@@ -295,6 +288,14 @@ export default class RemoteDevice {
     result["action"] = m;
   }
 
+  // C.6.15.2: replaces the class and the supported types; the handle and the
+  // connections are kept.
+  public update(body: ReqBody): void {
+    this.deviceClass = body.deviceClass;
+    this.supportedTypes = body.supportedTypes;
+    this.capabilities = capabilitiesOf(this.supportedTypes);
+  }
+
   public getClass(): string {
     return this.deviceClass;
   }
@@ -465,4 +466,12 @@ export default class RemoteDevice {
     }
     this.removeLocalEntryPoint();
   }
+}
+
+// One stopped capability per supported type.
+function capabilitiesOf(supportedTypes: string[]): DeviceCapabilities[] {
+  return supportedTypes.map((sType) => ({
+    effectType: sType as EffectType,
+    state: "stopped",
+  }));
 }

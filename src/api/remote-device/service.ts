@@ -4,11 +4,9 @@ import { closeEntryPoint, openLocalEntryPoint, openRemoteDeviceEntryPoint } from
 import { ApiError } from "../../util";
 import logger from "../../logger";
 import { Device } from "./types";
+import { RegisterBody } from "./schema";
 
-export type ReqBody = {
-    deviceClass: string;
-    supportedTypes: string[];
-};
+export type ReqBody = RegisterBody;
 
 export type Response = {
     handle: string;
@@ -34,6 +32,12 @@ async function createWebSocket(body: ReqBody): Promise<Response> {
         handle: device.getHandle(),
         url: device.getUrl(),
     };
+}
+
+// C.6.15.2: replaces the class and the supported types of the registry of
+// the handle; false if there is none.
+function updateWebSocket(handle: string, body: ReqBody): Promise<boolean> {
+    return manager.updateRemoteDevice(handle, body);
 }
 
 function deleteWebSocket(handle: string): Promise<boolean> {
@@ -86,4 +90,4 @@ async function getRemoteDevicesWithUrl(classId: string): Promise<Device[] | unde
     })));
 }
 
-export default { createWebSocket, deleteWebSocket, getRemoteDevicesWithUrl };
+export default { createWebSocket, updateWebSocket, deleteWebSocket, getRemoteDevicesWithUrl };

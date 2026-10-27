@@ -164,12 +164,12 @@ test('registro com Redis normal; remocao que falha mantem o dispositivo; depois 
     assert.equal(await listening(wsPort), true, 'remocao que falhou nao fecha a porta');
 
     const d = await call('DELETE', `/${handle}`);
-    assert.equal(d.status, 204);
+    assert.equal(d.status, 200);
     assert.equal(manager.getDeviceByHandle(handle), undefined);
     assert.equal(store.has(`remote-device:${handle}`), false);
     assert.deepEqual(published[published.length - 1], ['aop/devices/teste', '']);
     assert.equal(await listening(wsPort), false, 'a porta do dispositivo removido nao fica escutando');
-    expectError(await call('DELETE', `/${handle}`), 101);
+    expectError(await call('DELETE', `/${handle}`), 305);
 });
 
 test('EADDRINUSE na porta sorteada: sorteia outra, sem derrubar o processo', async (t) => {
@@ -189,7 +189,7 @@ test('EADDRINUSE na porta sorteada: sorteia outra, sem derrubar o processo', asy
         assert.equal((store.get(`remote-device:${r.json.handle}`) as Record<string, string>).url, `ws://localhost:${p + 1}`);
         assert.equal(await listening(p + 1), true);
 
-        assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 204);
+        assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
         assert.equal(await listening(p + 1), false);
     } finally {
         await release(busy);
@@ -213,7 +213,7 @@ test(`todas as ${LISTEN_ATTEMPTS} tentativas em porta ocupada: 404 {error:200}, 
     portRange(wsPort);
     const r = await call('POST', '/', BODY);
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
     assert.equal(await listening(wsPort), false);
 });
 
@@ -235,7 +235,7 @@ test('ponto de entrada local: a listagem 2.0 abre; o descadastro fecha as duas p
     const again = await call('GET', '/devices/teste');
     assert.equal(again.json.devices.find((d: { handle: string }) => d.handle === handle).url, mine.url);
 
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
     assert.equal(await listening(devPort), false, 'porta do dispositivo');
     assert.equal(await listening(localPort), false, 'porta do ponto de entrada local');
 });
@@ -262,7 +262,7 @@ test('listagens simultaneas abrem um ponto de entrada local so', async () => {
     const other = portOfUrl(urlA) === p ? p + 1 : p;
     assert.equal(await listening(other), false, 'nenhum segundo servidor escutando');
 
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
     assert.equal(await listening(portOfUrl(urlA)), false);
 });
 
@@ -284,7 +284,7 @@ test('a rota escolhe o codigo, nao o X-TV30-API-Version: /tv3 lista com url tamb
     // There are no routes by handle.
     for (const m of ['GET', 'DELETE']) expectError(await call(m, `/device/${handle}`, undefined, V100), 100);
 
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
     assert.equal(await listening(localPort), false);
 });
 
@@ -338,7 +338,7 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
         // The device that trusts the serverCert connects to the wss:// of the
         // registration.
         const device = await connects(r.json.url, cert);
-        assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+        assert.equal((await call('DELETE', `/${handle}`)).status, 200);
         await closed(device);
 
         // TV3WS_WS_TLS=false applies only to the entry point of the remote
@@ -347,7 +347,7 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
         portRange(devPort);
         const plain = await call('POST', '/', BODY);
         assert.equal(plain.json.url, `ws://localhost:${devPort}`);
-        assert.equal((await call('DELETE', `/${plain.json.handle}`)).status, 204);
+        assert.equal((await call('DELETE', `/${plain.json.handle}`)).status, 200);
     } finally {
         if (saved.dir === undefined) delete process.env.TV30_TLS_DIR; else process.env.TV30_TLS_DIR = saved.dir;
         process.env.TV3WS_WS_TLS = saved.flag ?? 'false';
@@ -360,4 +360,41 @@ after(async () => {
     // Devices left by a failed test: deregistration closes the ports and the
     // process can exit.
     for (const d of manager.getDevicesByClass('teste')) await manager.removeRemoteDevice(d.getHandle());
+});
+
+test('C.6.15.2 (2.0): corpo que nao e objeto JSON da 101; campo ausente 105; valor invalido 101; supportedTypes vazio aceito', async () => {
+    for (const route of ['/', '/handle-qualquer']) {
+        expectError(await call('POST', route, []), 101);
+        expectError(await call('POST', route, {}), 105);
+        expectError(await call('POST', route, { deviceClass: 'a' }), 105);
+        expectError(await call('POST', route, { deviceClass: '', supportedTypes: [] }), 101);
+        expectError(await call('POST', route, { deviceClass: 'a', supportedTypes: 'x' }), 101);
+        expectError(await call('POST', route, { deviceClass: 'a', supportedTypes: ['a', 1] }), 101);
+    }
+    const r = await call('POST', '/', { deviceClass: 'qualquer-classe', supportedTypes: [] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
+});
+
+test('C.6.15.2 (2.0): atualizacao troca classe e tipos e move o registro de classe; handle inexistente da 305', async () => {
+    const devPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const handle: string = r.json.handle;
+
+    const u = await call('POST', `/${handle}`, { deviceClass: 'outra', supportedTypes: ['wind'] });
+    assert.equal(u.status, 200, JSON.stringify(u.json));
+    assert.deepEqual(u.json, { handle });
+    const device = manager.getDeviceByHandle(handle)!;
+    assert.equal(device.getClass(), 'outra');
+    assert.deepEqual(device.getSupportedTypes(), ['wind']);
+    assert.deepEqual(manager.getDevicesByClass('teste').map(d => d.getHandle()), []);
+    assert.deepEqual(manager.getDevicesByClass('outra').map(d => d.getHandle()), [handle]);
+    assert.equal((store.get(`remote-device:${handle}`) as Record<string, string>).deviceClass, 'outra');
+    assert.ok((store.get('remote-devices:class:outra') as Set<string>).has(handle));
+    assert.equal(await listening(devPort), true, 'a porta do dispositivo continua');
+
+    expectError(await call('POST', '/nao-existe', BODY), 305);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
 });

@@ -2,39 +2,33 @@ import { Request, Response } from "express";
 import service from "./service";
 import { returnError } from "../../util";
 import { Device } from "./types";
+import { RegisterBody } from "./schema";
 
 async function POSTRemoteDevice(req: Request, res: Response): Promise<void> {
-    const body = req.body;
-    if (!body) {
-        returnError(res, 105, "request body");
-        return;
-    }
-    const missing: string[] = [];
-    if (!body.deviceClass) {
-        missing.push("deviceClass");
-    }
-    if (!body.supportedTypes) {
-        missing.push("supportedTypes");
-    } else if (body.supportedTypes.length === 0) {
-        missing.push("supportedTypes is empty");
-    }
-
-    if (missing.length > 0) {
-        returnError(res, 105, missing.join(", "));
-        return;
-    }
+    const body = req.body as RegisterBody;
     const response = await service.createWebSocket(body);
     res.status(200).json(response);
+}
+
+async function POSTRemoteDeviceUpdate(req: Request, res: Response): Promise<void> {
+    const handle = req.params.handle;
+    const body = req.body as RegisterBody;
+    const updated = await service.updateWebSocket(handle, body);
+    if (!updated) {
+        returnError(res, 305, `handle ${handle}`);
+        return;
+    }
+    res.status(200).json({ handle });
 }
 
 async function DELETERemoteDevice(req: Request, res: Response): Promise<void> {
     const handle = req.params.handle;
     const removed = await service.deleteWebSocket(handle);
     if (!removed) {
-        returnError(res, 101, `handle ${handle} does not exist`);
+        returnError(res, 305, `handle ${handle}`);
         return;
     }
-    res.status(204).json({});
+    res.status(200).json({});
 }
 
 // Responds the list of devices, or an empty object when there is none.
@@ -56,4 +50,4 @@ async function GETRemoteDevices(req: Request, res: Response): Promise<void> {
     sendDevices(res, devices);
 }
 
-export default { POSTRemoteDevice, DELETERemoteDevice, GETRemoteDevices };
+export default { POSTRemoteDevice, POSTRemoteDeviceUpdate, DELETERemoteDevice, GETRemoteDevices };

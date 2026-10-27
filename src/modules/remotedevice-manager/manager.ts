@@ -34,6 +34,20 @@ async function storeDevice(device: RemoteDevice): Promise<void> {
         }));
 }
 
+// Moves the registry from the index of the previous class to the one of the
+// current class and rewrites its record.
+async function restoreDevice(device: RemoteDevice, previousClass: string): Promise<void> {
+    const handle = device.getHandle();
+    await execOrThrow(redis.multi()
+        .srem(`remote-devices:class:${previousClass}`, handle)
+        .sadd(`remote-devices:class:${device.getClass()}`, handle)
+        .hset(`remote-device:${handle}`, {
+            deviceClass: device.getClass(),
+            supportedTypes: JSON.stringify(device.getSupportedTypes()),
+            url: device.getUrl(),
+        }));
+}
+
 async function unstoreDevice(handle: string, devclass: string): Promise<void> {
     await execOrThrow(redis.multi()
         .srem('remote-devices:index', handle)
@@ -80,6 +94,28 @@ async function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServ
   mqttClient.publish(`${TOPICS.devices}/${devclass}`, JSON.stringify(devclasses.get(devclass)), true);
 
   return device;
+}
+
+// C.6.15.2: replaces the class and the supported types of the registry of
+// the handle and moves it between the class indexes. The memory changes
+// before the mirror; false if there is no registry with the handle.
+async function updateRemoteDevice(handle: string, body: ReqBody): Promise<boolean> {
+  const dev = devices.get(handle);
+  if (!dev) {
+    return false;
+  }
+  const previousClass = dev.getClass();
+  dev.update(body);
+  const currentClass = dev.getClass();
+  if (currentClass !== previousClass) {
+    const previousHandles = (devclasses.get(previousClass) ?? []).filter(h => h !== handle);
+    devclasses.set(previousClass, previousHandles);
+    devclasses.set(currentClass, [...(devclasses.get(currentClass) ?? []), handle]);
+    mqttClient.publish(`${TOPICS.devices}/${previousClass}`, previousHandles.length > 0 ? JSON.stringify(previousHandles) : '', true);
+    mqttClient.publish(`${TOPICS.devices}/${currentClass}`, JSON.stringify(devclasses.get(currentClass)), true);
+  }
+  await restoreDevice(dev, previousClass);
+  return true;
 }
 
 // Armazenamento primeiro: se a remocao falhar, o dispositivo continua
@@ -152,6 +188,7 @@ export {
   associateAppNodes,
   disassociateAppNodes,
   addRemoteDevice,
+  updateRemoteDevice,
   removeRemoteDevice,
   getDevicesByClass,
   getDeviceByHandle,
