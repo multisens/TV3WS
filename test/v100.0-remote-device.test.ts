@@ -145,6 +145,7 @@ test('validação do corpo nas duas rotas POST (Seção 2.5)', async () => {
         [{ deviceClass: 'a' }, 105, 'supportedTypes'],
         [{ deviceClass: 1 }, 105, 'supportedTypes'],
         [{ deviceClass: null, supportedTypes: [] }, 101, 'deviceClass'],
+        [{ deviceClass: '', supportedTypes: [] }, 101, 'deviceClass'],
         [{ deviceClass: 'a', supportedTypes: 'x' }, 101, 'supportedTypes'],
         [{ deviceClass: 'a', supportedTypes: ['a', 1] }, 101, 'supportedTypes'],
     ];
@@ -155,7 +156,7 @@ test('validação do corpo nas duas rotas POST (Seção 2.5)', async () => {
             assert.ok(r.json.description.endsWith(detail), `${route} ${JSON.stringify(body)}: ${r.json.description}`);
         }
     }
-    const accepted = await call('POST', v100(''), { deviceClass: '', supportedTypes: [] });
+    const accepted = await call('POST', v100(''), { deviceClass: 'a', supportedTypes: [] });
     assert.equal(accepted.status, 200, JSON.stringify(accepted.json));
 });
 
