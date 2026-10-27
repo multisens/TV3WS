@@ -5,6 +5,7 @@ import {
     CLOSE_DEVICE_BUSY, CLOSE_DEVICE_UNAVAILABLE, CLOSE_PREEMPTED, sendAndClose,
 } from './messages';
 import { listeners } from '../notifications/listeners';
+import { projectRegistry } from './projection';
 import Registry from './registry';
 
 // Entry point identified by a token in the URL path: the one of the device
@@ -45,6 +46,7 @@ class RegistryManager {
         this.registryByHandle.set(registry.handle, registry);
         this.entryPointByToken.set(registry.token, { kind: 'device', registry });
         this.addToClass(registry);
+        this.project(registry.handle);
         return registry;
     }
 
@@ -65,6 +67,7 @@ class RegistryManager {
         if (classChanged && registry.isConnected()) {
             this.notify(EventType.AVAILABLE, registry);
         }
+        this.project(handle);
         return true;
     }
 
@@ -87,6 +90,7 @@ class RegistryManager {
         }
         this.removeFromClass(registry);
         registry.close();
+        this.project(handle);
         return true;
     }
 
@@ -96,6 +100,7 @@ class RegistryManager {
         const becameAvailable = registry.connect(ws);
         if (becameAvailable) {
             this.notify(EventType.AVAILABLE, registry);
+            this.project(registry.handle);
             return;
         }
         // Table C.86: the new connection of a device in a pair is told so
@@ -122,6 +127,7 @@ class RegistryManager {
             registry.setPair({ ws, clientId, clientType });
             this.notify(EventType.PAIR_FORMED, registry);
             registry.notifyDevice({ event: 'pairFormed', clientType });
+            this.project(registry.handle);
             return;
         }
 
@@ -152,6 +158,7 @@ class RegistryManager {
         if (wasCurrent && isRegistered) {
             this.endPairByUnavailability(registry);
             this.notify(EventType.UNAVAILABLE, registry);
+            this.project(registry.handle);
         }
     }
 
@@ -166,6 +173,7 @@ class RegistryManager {
         registry.setPair(undefined);
         this.notify(EventType.PAIR_ENDED, registry);
         registry.notifyDevice({ event: 'pairEnded', clientType: pair.clientType });
+        this.project(registry.handle);
     }
 
     // C.6.15.5: forwards a message of the device to the local client in the
@@ -279,6 +287,12 @@ class RegistryManager {
         listeners.publish(REMOTE_DEVICE_EVENT_CLASS, event, (params) => {
             return params.classId === undefined || params.classId === deviceClass;
         });
+    }
+
+    // Enqueues the projection in Redis of the registry of the handle, after
+    // the change in memory
+    protected project(handle: string): void {
+        projectRegistry(handle, () => this.registryByHandle.get(handle));
     }
 
     // C.6.15.5: the device is no longer available; the local client in the

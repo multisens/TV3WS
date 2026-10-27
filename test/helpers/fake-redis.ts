@@ -106,6 +106,9 @@ export function createFakeRedis() {
             if (!hash(`client:${id}`)) throw new Error(`TV30ESQUEMA tv30_cliente_inclui_autorizado: client:${id} ausente (invariante autorizado-tem-registro)`);
             return ops.sadd('clients:authorized', id);
         },
+        tv30_v100_remote_device_write: ([handle, ...a]) => { store.set(`v100.0:remote-device:${handle}`, paresDe(a)); return 1; },
+        tv30_v100_remote_device_remove: ([handle]) => ops.del(`v100.0:remote-device:${handle}`),
+        tv30_v100_remote_devices_clear: () => ops.del(...ops.keys('v100.0:remote-device:*')),
     };
     type OpName = keyof typeof ops;
 

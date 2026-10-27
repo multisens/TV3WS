@@ -39,6 +39,7 @@ const app = require('../src/app').default;
 const { startEntryServer, stopEntryServer, localEntryPointUrl } = require('../src/v100.0/modules/remote-device/entry-server');
 const { registries } = require('../src/v100.0/modules/remote-device/manager');
 const { startNotificationServer, stopNotificationServer } = require('../src/v100.0/modules/notifications/server');
+const { startProjection } = require('../src/v100.0/modules/remote-device/projection');
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const PING_INTERVAL_MS = 100;
@@ -53,6 +54,7 @@ before(async () => {
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     await startEntryServer();
     await startNotificationServer();
+    await startProjection();
 });
 after(async () => {
     await stopEntryServer();
@@ -613,4 +615,58 @@ test('eventos remote-device: filtro classId; recusa e transferência não geram 
 
     assert.deepEqual(filtered.map((e: any) => e.eventType), ['available', 'pairFormed']);
     assert.equal(elsewhere.length, 0);
+});
+
+// Projection of the registry in Redis (v100.0:remote-device:{handle})
+const projected = (handle: string) => fake.store.get(`v100.0:remote-device:${handle}`) as Record<string, string> | undefined;
+
+test('projeção no Redis: registro, conexão, par, queda e cancelamento, sem o token do ponto de entrada', async () => {
+    const { handle, registry, device } = await connectedDevice();
+    await waitFor(() => projected(handle)?.state === 'connected');
+    assert.deepEqual(projected(handle), {
+        deviceId: registry.deviceId,
+        deviceClass: 'c',
+        supportedTypes: '["t"]',
+        state: 'connected',
+        paired: 'false',
+        disconnectedAt: String(registry.getDisconnectedAt()),
+    });
+
+    await open(localUrlOf(registry, 'sa', 'standAlone'));
+    await waitFor(() => projected(handle)?.paired === 'true');
+
+    device.close();
+    await waitFor(() => projected(handle)?.state === 'registered');
+    assert.equal(projected(handle)?.paired, 'false');
+    assert.equal(projected(handle)?.disconnectedAt, String(registry.getDisconnectedAt()));
+
+    const updated = await call('POST', v100(`/${handle}`), { deviceClass: 'd', supportedTypes: [] });
+    assert.equal(updated.status, 200, JSON.stringify(updated.json));
+    await waitFor(() => projected(handle)?.deviceClass === 'd');
+    assert.equal(projected(handle)?.supportedTypes, '[]');
+
+    assert.equal((await call('DELETE', v100(`/${handle}`))).status, 200);
+    await waitFor(() => projected(handle) === undefined);
+});
+
+test('projeção no Redis: recusa da função não muda a resposta da API; a gravação seguinte regrava tudo', async () => {
+    fake.recusar('tv30_v100_remote_device_write', 'TV30ESQUEMA tv30_v100_remote_device_write: recusa de teste');
+    try {
+        const reg = await register();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        assert.equal(projected(reg.handle), undefined);
+        fake.recusar('tv30_v100_remote_device_write');
+
+        await open(reg.url);
+        await waitFor(() => projected(reg.handle)?.state === 'connected');
+        assert.equal(projected(reg.handle)?.deviceClass, 'c');
+    } finally {
+        fake.recusar('tv30_v100_remote_device_write');
+    }
+});
+
+test('projeção no Redis: a partida limpa o que sobrou de outra execução', async () => {
+    fake.store.set('v100.0:remote-device:3c8a7d2f-5e4b-4a9c-8d1e-2f3a4b5c6d7e', { deviceClass: 'antigo' });
+    await startProjection();
+    assert.equal(fake.store.has('v100.0:remote-device:3c8a7d2f-5e4b-4a9c-8d1e-2f3a4b5c6d7e'), false);
 });

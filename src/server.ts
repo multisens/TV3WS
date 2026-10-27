@@ -7,6 +7,7 @@ import { connectRedis, whenRedisReady } from './redis-client';
 import { clearStoredRegistry } from './modules/remotedevice-manager/manager';
 import { backfillAuthorizedClients } from './modules/auth-manager/manager';
 import { startEntryServer } from './v100.0/modules/remote-device/entry-server';
+import { startProjection } from './v100.0/modules/remote-device/projection';
 import { startNotificationServer } from './v100.0/modules/notifications/server';
 import { loadAdvertisedEndpoint, registerManifest } from './manifest';
 import { listenHosts } from './listen-hosts';
@@ -65,6 +66,7 @@ function startHttps(hosts: string[]): void {
 
 whenRedisReady('cleanup of the remote-devices mirror', clearStoredRegistry);
 whenRedisReady('clients:authorized from client:*', backfillClients);
+whenRedisReady('cleanup of the v100.0 remote-devices projection', startProjection);
 connectRedis();
 
 void startV100Servers();

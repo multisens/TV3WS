@@ -1,10 +1,10 @@
 import redis from './redis-client';
 
-// The only write point of tv3ws to session:*, client:*, clients:* and
-// user:{id}:broadcaster-attrs:{scid}: FCALL of the tv30 functions, which
-// check the schema and write atomically; data outside the schema gives a
-// TV30ESQUEMA error and nothing is written. numkeys 0: keys in the
-// arguments.
+// The only write point of tv3ws to session:*, client:*, clients:*,
+// user:{id}:broadcaster-attrs:{scid} and v100.0:remote-device:{handle}: FCALL
+// of the tv30 functions, which check the schema and write atomically; data
+// outside the schema gives a TV30ESQUEMA error and nothing is written.
+// numkeys 0: keys in the arguments.
 
 function fcall(nome: string, args: string[]): Promise<unknown> {
     return redis.call('FCALL', nome, 0, ...args);
@@ -54,4 +54,20 @@ export function clienteBloqueia(id: string): Promise<unknown> {
 // Returns 1 if added, 0 otherwise.
 export async function clienteIncluiAutorizado(id: string): Promise<number> {
     return Number(await fcall('tv30_cliente_inclui_autorizado', [id]));
+}
+
+// v100.0:remote-device:{handle}: rewrites the whole projection of the
+// registry of version 100.0.
+export function writeRemoteDeviceV100(handle: string, fields: Record<string, string>): Promise<unknown> {
+    return fcall('tv30_v100_remote_device_write', [handle, ...pares(fields)]);
+}
+
+// Removes the projection of the registry of version 100.0.
+export function removeRemoteDeviceV100(handle: string): Promise<unknown> {
+    return fcall('tv30_v100_remote_device_remove', [handle]);
+}
+
+// Removes the projection of every registry of version 100.0.
+export function clearRemoteDevicesV100(): Promise<unknown> {
+    return fcall('tv30_v100_remote_devices_clear', []);
 }
