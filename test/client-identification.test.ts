@@ -299,7 +299,7 @@ test('cliente so com client:{id}, fora de clients:authorized: reuso da 101 e o b
 });
 
 // --- client writes by the Redis functions -----------------------------------
-test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das funcoes tv30_cliente_*', async () => {
+test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das funcoes tv30_client_*', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
     fake.fcalls.length = 0;
@@ -308,9 +308,9 @@ test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das func
     const tok = await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken });
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
     const nomes = fake.fcalls.map(c => c[0]);
-    assert.deepEqual(nomes.filter(n => n === 'tv30_cliente_autoriza').length, 1);
-    assert.ok(nomes.includes('tv30_cliente_grava'), 'rotacao/emissao gravam client:{id} pela funcao');
-    const autoriza = fake.fcalls.find(c => c[0] === 'tv30_cliente_autoriza')!;
+    assert.deepEqual(nomes.filter(n => n === 'tv30_client_authorize').length, 1);
+    assert.ok(nomes.includes('tv30_client_write'), 'rotacao/emissao gravam client:{id} pela funcao');
+    const autoriza = fake.fcalls.find(c => c[0] === 'tv30_client_authorize')!;
     assert.equal(autoriza[1], cid);
     assert.deepEqual(autoriza.slice(2).filter((_, i) => i % 2 === 0), ['class', 'refreshToken'], 'campos em ordem estavel, sem accessToken antes do /token');
 
@@ -318,14 +318,14 @@ test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das func
     const no = randomUUID();
     fake.fcalls.length = 0;
     expectError(await authorize(no), 102);
-    assert.deepEqual(fake.fcalls, [['tv30_cliente_bloqueia', no]]);
+    assert.deepEqual(fake.fcalls, [['tv30_client_block', no]]);
 });
 
 test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora de clients:authorized', async () => {
     viewerAnswer = true;
     const cid = randomUUID();
-    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: client:x campo class: deve ser um de associated, standAlone, nonLocal';
-    fake.recusar('tv30_cliente_autoriza', msg);
+    const msg = 'TV30SCHEMA tv30_client_authorize: client:x field class: must be one of associated, standAlone, nonLocal';
+    fake.recusar('tv30_client_authorize', msg);
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
@@ -333,7 +333,7 @@ test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora 
         expectError(r, 200);
         assert.ok(r.json.description.includes(msg), r.json.description);
     } finally {
-        fake.recusar('tv30_cliente_autoriza');
+        fake.recusar('tv30_client_authorize');
         console.error = errorOrig;
     }
     assert.ok(!members('clients:authorized').includes(cid));
@@ -424,7 +424,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
         assert.equal(typeof JSON.parse(aes(false, p2!.secret, ok.raw).toString('utf8')).accessToken, 'string');
         assert.ok(members('clients:authorized').includes(p.cid));
         assert.equal((store.get(`client:${p.cid}`) as Record<string, string>).class, 'nonLocal');
-        const autoriza = fake.fcalls.filter(c => c[0] === 'tv30_cliente_autoriza');
+        const autoriza = fake.fcalls.filter(c => c[0] === 'tv30_client_authorize');
         assert.equal(autoriza.length, 1);
         assert.deepEqual(autoriza[0].slice(1, 4), [p.cid, 'class', 'nonLocal']);
     });
@@ -465,8 +465,8 @@ test('nao local com tentativa pendente: o novo pedido recusado no pop-up bloquei
 
 test('gravacao da autorizacao recusada no /tv3/token: 404 {error:200} sem credencial e sem registro; o material volta e o mesmo challenge-response conclui', async () => {
     const p = await pairNonLocal('kex');
-    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: recusa de teste';
-    fake.recusar('tv30_cliente_autoriza', msg);
+    const msg = 'TV30SCHEMA tv30_client_authorize: test refusal';
+    fake.recusar('tv30_client_authorize', msg);
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
@@ -475,7 +475,7 @@ test('gravacao da autorizacao recusada no /tv3/token: 404 {error:200} sem creden
         assert.equal(r.json.accessToken, undefined);
         assert.ok(r.json.description.includes(msg), r.json.description);
     } finally {
-        fake.recusar('tv30_cliente_autoriza');
+        fake.recusar('tv30_client_authorize');
         console.error = errorOrig;
     }
     notStored(p.cid);
@@ -604,13 +604,13 @@ test('dois /tv3/token simultaneos com o mesmo challenge-response: so um emite cr
 
 test('emissao falha depois do desafio conferido: o material volta, o mesmo challenge-response conclui e depois nao vale mais', async () => {
     const p = await pairNonLocal('qrcode');
-    fake.recusar('tv30_cliente_grava', 'TV30ESQUEMA tv30_cliente_grava: recusa de teste');
+    fake.recusar('tv30_client_write', 'TV30SCHEMA tv30_client_write: test refusal');
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
         expectError(await tokenByChallenge(p), 200);
     } finally {
-        fake.recusar('tv30_cliente_grava');
+        fake.recusar('tv30_client_write');
         console.error = errorOrig;
     }
     assert.equal((await tokenByChallenge(p)).status, 200);

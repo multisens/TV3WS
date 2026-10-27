@@ -249,11 +249,11 @@ test('depois da trava, novo /tv3/authorize de A sem pareamento concluido abre o 
     expectError(await token(a.cid, challengeResponse(a)), 102);
 });
 
-for (const funcao of ['tv30_cliente_autoriza', 'tv30_cliente_grava']) {
+for (const funcao of ['tv30_client_authorize', 'tv30_client_write']) {
     test(`${funcao} recusada no /tv3/token depois do desafio conferido: sem fechamento (pareamento nao concluido)`, async () => {
         const p = await authorize('qrcode');
         const from = published.length;
-        fake.recusar(funcao, `TV30ESQUEMA ${funcao}: recusa de teste`);
+        fake.recusar(funcao, `TV30SCHEMA ${funcao}: test refusal`);
         const errorOrig = console.error;
         console.error = () => undefined;
         try {
@@ -302,14 +302,14 @@ test('a recusa no sim/nao libera a camada', async () => {
 });
 
 test('erro depois da reserva (gravacao recusada pela funcao do Redis) libera a camada', async () => {
-    const msg = 'TV30ESQUEMA tv30_cliente_autoriza: recusa de teste';
-    fake.recusar('tv30_cliente_autoriza', msg);
+    const msg = 'TV30SCHEMA tv30_client_authorize: test refusal';
+    fake.recusar('tv30_client_authorize', msg);
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
         expectError(await authorizeRaw(novoLocal()), 200);
     } finally {
-        fake.recusar('tv30_cliente_autoriza');
+        fake.recusar('tv30_client_authorize');
         console.error = errorOrig;
     }
     assert.equal(_camadaParaTestes.ocupacao(), undefined);

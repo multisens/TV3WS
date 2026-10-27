@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import Client, { ClientClass, isClientClass } from './client';
 import redis from '../../redis-client';
-import * as redisFunctions from '../../redis-funcoes';
+import * as redisFunctions from '../../redis-functions';
 import { stringFromEnv } from '../../util';
 import { execOrThrow } from '../../util/redis-result';
 dotenv.config();
@@ -70,7 +70,7 @@ export async function clientIdStatus(id: string): Promise<ClientIdStatus> {
 
 export async function authorizeClient(id: string, clientClass: ClientClass = 'standAlone'): Promise<Client> {
     const client = new Client(id, clientClass);
-    await redisFunctions.clienteAutoriza(id, clientFields(client));
+    await redisFunctions.clientAuthorize(id, clientFields(client));
     authorizedClients.set(id, client);
     return client;
 }
@@ -96,7 +96,7 @@ export function discardPending(id: string): void {
 // the client stays pending.
 export async function authorizePairedClient(client: Client): Promise<void> {
     const id = client.getId();
-    await redisFunctions.clienteAutoriza(id, clientFields(client));
+    await redisFunctions.clientAuthorize(id, clientFields(client));
     if (pendingClients.get(id) === client) {
         pendingClients.delete(id);
     }
@@ -108,7 +108,7 @@ export async function authorizePairedClient(client: Client): Promise<void> {
 export async function blockClient(id: string): Promise<void> {
     authorizedClients.delete(id);
     pendingClients.delete(id);
-    await redisFunctions.clienteBloqueia(id);
+    await redisFunctions.clientBlock(id);
 }
 
 export async function listAuthorizedClients(): Promise<string[]> {
@@ -122,7 +122,7 @@ export async function listBlockedClients(): Promise<string[]> {
 }
 
 // Boot: adds to clients:authorized every client:{id} that is not blocked.
-// Check and insertion are atomic (tv30_cliente_inclui_autorizado), so that a
+// Check and insertion are atomic (tv30_client_add_authorized), so that a
 // block in between does not break the invariant.
 export async function backfillAuthorizedClients(): Promise<number> {
     let cursor = '0';
@@ -132,7 +132,7 @@ export async function backfillAuthorizedClients(): Promise<number> {
         cursor = next;
         for (const key of keys) {
             const id = key.slice(CLIENT_KEY_PREFIX.length);
-            added += await redisFunctions.clienteIncluiAutorizado(id);
+            added += await redisFunctions.clientAddAuthorized(id);
         }
     } while (cursor !== '0');
     return added;
@@ -200,7 +200,7 @@ function createAccessToken(alg: TokenAlg, clientId: string, clientClass: ClientC
 }
 
 async function persistClient(client: Client): Promise<void> {
-    await redisFunctions.clienteGrava(client.getId(), clientFields(client));
+    await redisFunctions.clientWrite(client.getId(), clientFields(client));
 }
 
 function clientKey(id: string): string {

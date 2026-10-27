@@ -118,7 +118,7 @@ test('session:current-service pela funcao: cinco campos, serviceId e serviceName
         fake.fcalls.length = 0;
         await mqtt.deliver(TOPICS.current_service, sid);
         await tick();
-        const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_sessao_servico');
+        const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_session_service');
         assert.equal(chamadas.length, 1, `uma chamada para o servico ${sid}`);
         const h = fake.store.get('session:current-service') as Record<string, string>;
         assert.deepEqual(Object.keys(h).sort(), ['originalNetworkId', 'serviceContextId', 'serviceId', 'serviceName', 'transportStreamId']);
@@ -131,16 +131,16 @@ test('session:current-service pela funcao: cinco campos, serviceId e serviceName
     const logs: string[] = [];
     const [logOrig, errorOrig] = [console.log, console.error];
     console.log = console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
-    fake.recusar('tv30_sessao_servico', 'TV30ESQUEMA tv30_sessao_servico: session:current-service campo serviceName: teste');
+    fake.recusar('tv30_session_service', 'TV30SCHEMA tv30_session_service: session:current-service field serviceName: test');
     try {
         await mqtt.deliver(TOPICS.current_service, '0');
         await tick();
         await tick();
     } finally {
-        fake.recusar('tv30_sessao_servico');
+        fake.recusar('tv30_session_service');
         [console.log, console.error] = [logOrig, errorOrig];
     }
-    assert.ok(logs.some(l => l.includes('session:current-service') && l.includes('TV30ESQUEMA')), `recusa logada: ${logs.join(' | ')}`);
+    assert.ok(logs.some(l => l.includes('session:current-service') && l.includes('TV30SCHEMA')), `recusa logada: ${logs.join(' | ')}`);
     assert.equal((await get()).status, 200, 'a API do servico corrente segue respondendo da memoria');
     await mqtt.deliver(TOPICS.current_service, '');
 });

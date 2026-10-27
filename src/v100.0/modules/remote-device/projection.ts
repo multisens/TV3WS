@@ -1,5 +1,5 @@
 import logger from '../../../logger';
-import { clearRemoteDevicesV100, removeRemoteDeviceV100, writeRemoteDeviceV100 } from '../../../redis-funcoes';
+import { clearRemoteDevicesV100, removeRemoteDeviceV100, writeRemoteDeviceV100 } from '../../../redis-functions';
 import Registry from './registry';
 
 // Pending writes of each handle; a write starts after the previous one of

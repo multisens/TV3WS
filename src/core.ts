@@ -4,7 +4,7 @@ import logger from './logger';
 import mqttClient, { TOPICS, client } from "./mqtt-client";
 import { AppNode } from "./modules/remotedevice-manager/remote-device";
 import { associateAppNodes, disassociateAppNodes } from "./modules/remotedevice-manager/manager";
-import * as funcoes from './redis-funcoes';
+import * as redisFunctions from './redis-functions';
 import { integerServiceId } from './util/service-id';
 dotenv.config();
 
@@ -168,10 +168,10 @@ function currentService(sid: string): void {
   // requires serviceContextId.
   if (!sid) return;
 
-  // tv30_sessao_servico rewrites the whole hash and checks the schema.
+  // tv30_session_service rewrites the whole hash and checks the schema.
   // serviceId: a decimal integer or empty (Table C.8).
   const serviceId = integerServiceId(data.current.serviceId);
-  funcoes.sessaoServico({
+  redisFunctions.sessionService({
     serviceContextId: data.current.serviceContextId,
     serviceId: serviceId === undefined ? '' : String(serviceId),
     serviceName: data.current.serviceName ?? '',

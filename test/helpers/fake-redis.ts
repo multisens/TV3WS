@@ -2,7 +2,7 @@
 // failure as ioredis with Redis down: a single command rejects, a pipeline
 // resolves [error, null] per entry, MULTI rejects on EXEC. FCALL mimics the
 // effect of the tv30 functions without checking the schema; recusar()
-// simulates TV30ESQUEMA.
+// simulates TV30SCHEMA.
 type Value = string | Set<string> | Record<string, string>;
 
 export const FAKE_REDIS_ERROR = 'redis indisponivel (duble de teste)';
@@ -63,7 +63,7 @@ export function createFakeRedis() {
         // Only FCALL <function> 0 ...args (see the functions below).
         call: (cmd: string, nome: string, numkeys: number | string, ...args: string[]) => {
             if (String(cmd).toUpperCase() !== 'FCALL') throw new Error(`call: comando ${cmd} nao suportado pelo duble`);
-            if (Number(numkeys) !== 0) throw new Error(`TV30ESQUEMA ${nome}: chamada com numkeys ${numkeys}`);
+            if (Number(numkeys) !== 0) throw new Error(`TV30SCHEMA ${nome}: call with numkeys ${numkeys}`);
             fcalls.push([nome, ...args.map(String)]);
             const recusa = recusas.get(nome);
             if (recusa !== undefined) throw new Error(recusa);
@@ -79,13 +79,13 @@ export function createFakeRedis() {
         for (let k = i; k + 1 < a.length; k += 2) h[a[k]] = a[k + 1];
         return h;
     };
-    // Effect of the tv30 functions tv3ws calls (infra/redis/funcoes.lua).
+    // Effect of the tv30 functions tv3ws calls (infra/redis/functions.lua).
     const funcoes: Record<string, (a: string[]) => unknown> = {
-        tv30_sessao_usuario: ([v]) => { store.set('session:current-user', v); return 1; },
-        tv30_sessao_servico_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
-        tv30_sessao_servico: (a) => { store.set('session:current-service', paresDe(a)); return 1; },
-        tv30_atributos_emissora: ([id, scid, ...a]) => {
-            if (!set('users:index')?.has(id)) throw new Error(`TV30ESQUEMA tv30_atributos_emissora: user:${id}:broadcaster-attrs:${scid} perfil "${id}" fora de users:index (invariante perfil-dependentes)`);
+        tv30_session_user: ([v]) => { store.set('session:current-user', v); return 1; },
+        tv30_session_service_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
+        tv30_session_service: (a) => { store.set('session:current-service', paresDe(a)); return 1; },
+        tv30_broadcaster_attributes: ([id, scid, ...a]) => {
+            if (!set('users:index')?.has(id)) throw new Error(`TV30SCHEMA tv30_broadcaster_attributes: user:${id}:broadcaster-attrs:${scid} profile "${id}" outside users:index (invariant profile-dependents)`);
             const k = `user:${id}:broadcaster-attrs:${scid}`;
             const h = { ...(hash(k) ?? {}) };
             const pedidos = paresDe(a);
@@ -93,17 +93,17 @@ export function createFakeRedis() {
             if (Object.keys(h).length) store.set(k, h); else store.delete(k);
             return Object.keys(pedidos).length;
         },
-        tv30_cliente_grava: ([id, ...a]) => { ops.hset(`client:${id}`, paresDe(a)); return 1; },
-        tv30_cliente_autoriza: ([id, ...a]) => {
+        tv30_client_write: ([id, ...a]) => { ops.hset(`client:${id}`, paresDe(a)); return 1; },
+        tv30_client_authorize: ([id, ...a]) => {
             ops.hset(`client:${id}`, paresDe(a));
             ops.srem('clients:blocked', id);
             ops.sadd('clients:authorized', id);
             return 1;
         },
-        tv30_cliente_bloqueia: ([id]) => { ops.srem('clients:authorized', id); ops.sadd('clients:blocked', id); return 1; },
-        tv30_cliente_inclui_autorizado: ([id]) => {
+        tv30_client_block: ([id]) => { ops.srem('clients:authorized', id); ops.sadd('clients:blocked', id); return 1; },
+        tv30_client_add_authorized: ([id]) => {
             if (set('clients:blocked')?.has(id)) return 0;
-            if (!hash(`client:${id}`)) throw new Error(`TV30ESQUEMA tv30_cliente_inclui_autorizado: client:${id} ausente (invariante autorizado-tem-registro)`);
+            if (!hash(`client:${id}`)) throw new Error(`TV30SCHEMA tv30_client_add_authorized: client:${id} absent: only who has the record enters clients:authorized (invariant authorized-has-record)`);
             return ops.sadd('clients:authorized', id);
         },
         tv30_v100_remote_device_write: ([handle, ...a]) => { store.set(`v100.0:remote-device:${handle}`, paresDe(a)); return 1; },

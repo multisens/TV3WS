@@ -163,16 +163,16 @@ test('Redis fora do ar: current-user e atributos respondem 404 {error:200}', asy
 });
 
 // --- writes by the Redis functions ------------------------------------------
-test('escritas da sessao saem por FCALL (tv30_sessao_usuario, tv30_sessao_servico_id)', async () => {
+test('escritas da sessao saem por FCALL (tv30_session_user, tv30_session_service_id)', async () => {
     fake.fcalls.length = 0;
     await handlers.get('aop/currentUser')!(U9);
     await handlers.get('aop/currentService')!('svc-z');
     seedProfiles('svc-a');
     assert.equal((await call('POST', '/current-service/users/current-user', { id: U1 })).status, 200);
-    assert.deepEqual(fake.fcalls, [['tv30_sessao_usuario', U9], ['tv30_sessao_servico_id', 'svc-z'], ['tv30_sessao_usuario', U1]]);
+    assert.deepEqual(fake.fcalls, [['tv30_session_user', U9], ['tv30_session_service_id', 'svc-z'], ['tv30_session_user', U1]]);
 });
 
-test('C.6.14.5 pela funcao tv30_atributos_emissora: grava, vazio remove, resposta com o alterado', async () => {
+test('C.6.14.5 pela funcao tv30_broadcaster_attributes: grava, vazio remove, resposta com o alterado', async () => {
     seedProfiles('svc-a');
     fake.fcalls.length = 0;
     let r = await call('POST', `/svc-a/users/${U1}`, { cor: 'azul', tam: 'G' });
@@ -181,7 +181,7 @@ test('C.6.14.5 pela funcao tv30_atributos_emissora: grava, vazio remove, respost
     r = await call('POST', `/svc-a/users/${U1}`, { cor: '' });
     assert.equal(r.status, 200, r.text);
     assert.deepEqual(store.get(`user:${U1}:broadcaster-attrs:svc-a`), { tam: 'G' });
-    assert.deepEqual(fake.fcalls, [['tv30_atributos_emissora', U1, 'svc-a', 'cor', 'azul', 'tam', 'G'], ['tv30_atributos_emissora', U1, 'svc-a', 'cor', '']]);
+    assert.deepEqual(fake.fcalls, [['tv30_broadcaster_attributes', U1, 'svc-a', 'cor', 'azul', 'tam', 'G'], ['tv30_broadcaster_attributes', U1, 'svc-a', 'cor', '']]);
     // Protected basic attribute: 101 from tv3ws, without reaching the
     // function.
     fake.fcalls.length = 0;
@@ -194,8 +194,8 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
     const logs: string[] = [];
     const errorOrig = console.error;
     console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
-    const msg = 'TV30ESQUEMA tv30_sessao_usuario: session:current-user valor: tem 65 caracteres, maximo 64';
-    fake.recusar('tv30_sessao_usuario', msg);
+    const msg = 'TV30SCHEMA tv30_session_user: session:current-user value: has 65 characters, maximum 64';
+    fake.recusar('tv30_session_user', msg);
     const publicados = published.length;
     try {
         const r = await call('POST', '/current-service/users/current-user', { id: U1 });
@@ -205,15 +205,15 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
         assert.equal(published.length, publicados, 'nao publica o que nao gravou');
         await assert.rejects(Promise.resolve(handlers.get('aop/currentUser')!('x'.repeat(65))), { message: msg });
     } finally {
-        fake.recusar('tv30_sessao_usuario');
+        fake.recusar('tv30_session_user');
         console.error = errorOrig;
     }
-    fake.recusar('tv30_atributos_emissora', `TV30ESQUEMA tv30_atributos_emissora: user:${U1}:broadcaster-attrs:svc-a perfil "${U1}" fora de users:index (invariante perfil-dependentes)`);
+    fake.recusar('tv30_broadcaster_attributes', `TV30SCHEMA tv30_broadcaster_attributes: user:${U1}:broadcaster-attrs:svc-a profile "${U1}" outside users:index (invariant profile-dependents)`);
     console.error = () => undefined;
     try {
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'azul' }), 200);
     } finally {
-        fake.recusar('tv30_atributos_emissora');
+        fake.recusar('tv30_broadcaster_attributes');
         console.error = errorOrig;
     }
 });
@@ -427,9 +427,9 @@ test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101,
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
-        fake.recusar('tv30_atributos_emissora', 'TV30ESQUEMA tv30_atributos_emissora: teste');
+        fake.recusar('tv30_broadcaster_attributes', 'TV30SCHEMA tv30_broadcaster_attributes: test');
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'verde' }), 200);
-        fake.recusar('tv30_atributos_emissora');
+        fake.recusar('tv30_broadcaster_attributes');
         fake.setDown(true);
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'verde' }), 200);
         fake.setDown(false);
@@ -441,7 +441,7 @@ test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101,
         store.set('session:current-service-id', '');
         expectError(await call('POST', `/current-service/users/${U1}`, { cor: 'verde' }), 300);
     } finally {
-        fake.recusar('tv30_atributos_emissora');
+        fake.recusar('tv30_broadcaster_attributes');
         fake.setDown(false);
         console.error = errorOrig;
     }

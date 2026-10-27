@@ -3,7 +3,7 @@ import fs from 'fs';
 import mqttClient, { TOPICS } from '../../mqtt-client';
 import path from 'path';
 import redis from '../../redis-client';
-import * as funcoes from '../../redis-funcoes';
+import * as redisFunctions from '../../redis-functions';
 import { ApiError, execOrThrow } from '../../util';
 import { resolveInsideDir } from '../../util/safe-path';
 import { Expression, UserAttributes, UsersIdList } from './types';
@@ -44,11 +44,11 @@ async function resolveActiveService(): Promise<string> {
 // The session mirrors the topics; a value outside the schema is refused, and
 // the MQTT handler logs it.
 async function updateCurrentUser(m: string): Promise<void> {
-    await funcoes.sessaoUsuario(m);
+    await redisFunctions.sessionUser(m);
 }
 
 async function updateCurrentService(m: string): Promise<void> {
-    await funcoes.sessaoServicoId(m);
+    await redisFunctions.sessionServiceId(m);
 }
 
 mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
@@ -90,7 +90,7 @@ async function setCurrentUser(uuid: string): Promise<void> {
     const currentService = await readCurrentService();
     if (!currentService) throw new ApiError(300);
     await assertUserVisible(uuid, currentService);
-    await funcoes.sessaoUsuario(uuid);
+    await redisFunctions.sessionUser(uuid);
     mqttClient.publish(TOPICS.current_user, uuid, true);
 }
 
@@ -263,7 +263,7 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
 
     // HDEL of the empty values and HSET of the others in a single function,
     // which checks the schema.
-    await funcoes.atributosEmissora(uuid, scid, changed);
+    await redisFunctions.broadcasterAttributes(uuid, scid, changed);
 
     // Notifies the viewer only after writing and if a value changed; a failed
     // write does not notify.

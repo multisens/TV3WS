@@ -274,7 +274,7 @@ test('troca de aplicacao: a nova nao serve o diretorio da anterior antes do .../
 
 // Last: changes the service, and the directory of the new application has
 // not arrived yet.
-test('sem diretorio da aplicacao conhecido (core.app.url vazio): 305, sem ler relativo ao diretorio corrente do tv3ws', async () => {
+test('without a directory da aplicacao conhecido (core.app.url vazio): 305, sem ler relativo ao diretorio corrente do tv3ws', async () => {
     await mqtt.deliver(TOPICS.current_service, '2');
     await mqtt.deliver('aop/2/currentApp', 'app2');
     // The cwd of npm test is tv3ws, which has package.json.

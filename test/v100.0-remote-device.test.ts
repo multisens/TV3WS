@@ -650,7 +650,7 @@ test('projeção no Redis: registro, conexão, par, queda e cancelamento, sem o 
 });
 
 test('projeção no Redis: recusa da função não muda a resposta da API; a gravação seguinte regrava tudo', async () => {
-    fake.recusar('tv30_v100_remote_device_write', 'TV30ESQUEMA tv30_v100_remote_device_write: recusa de teste');
+    fake.recusar('tv30_v100_remote_device_write', 'TV30SCHEMA tv30_v100_remote_device_write: test refusal');
     try {
         const reg = await register();
         await new Promise((resolve) => setTimeout(resolve, 30));
