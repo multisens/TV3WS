@@ -183,8 +183,8 @@ test('EADDRINUSE na porta sorteada: sorteia outra, sem derrubar o processo', asy
     const p = await freePortPair();
     const busy = await occupy(p);
     try {
-        // Draw in [P, P+2): P or P+1.
-        portRange(p, p + 2);
+        // Draw in [P, P+1]: P or P+1.
+        portRange(p, p + 1);
         let calls = 0;
         // The first draw falls on the port in use (P), the next ones on P+1.
         t.mock.method(Math, 'random', () => (calls++ === 0 ? 0 : 0.99));
@@ -256,7 +256,7 @@ test('listagens simultaneas abrem um ponto de entrada local so', async () => {
 
     const p = await freePortPair();
     // Without the lock, the second request would open the other port.
-    portRange(p, p + 2);
+    portRange(p, p + 1);
     const [a, b] = await Promise.all([
         call('GET', '/devices/teste'),
         call('GET', '/devices/teste'),

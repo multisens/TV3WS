@@ -14,11 +14,13 @@ export const LISTEN_ATTEMPTS = 10;
 // Close code sent to the clients when an entry point closes (going away).
 const CLOSE_GOING_AWAY = 1001;
 
-// Port drawn from WS_PORT_MIN to WS_PORT_MAX, read on every opening.
+// Port drawn from WS_PORT_MIN to WS_PORT_MAX, both included, read on every
+// opening.
 export function generateDynamicallyPort(): number {
     const min = positiveIntFromEnv('WS_PORT_MIN');
     const max = positiveIntFromEnv('WS_PORT_MAX');
-    return Math.floor(min + Math.random() * (max - min));
+    const offset = Math.floor(Math.random() * (max - min + 1));
+    return min + offset;
 }
 
 // The entry point of the remote device, with the receiver certificate when
