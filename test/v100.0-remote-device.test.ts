@@ -43,6 +43,14 @@ const { startProjection } = require('../src/v100.0/modules/remote-device/project
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const PING_INTERVAL_MS = 100;
+const STATE_TOPIC = 'aop/application-lifecycle-manager/application-state';
+const APP_A = { serviceContextId: 'urn:tv30:service:a', appId: 'app-a', origin: 'http://app-a.apps.localhost:8080' };
+const APP_B = { serviceContextId: 'urn:tv30:service:b', appId: 'app-b', origin: 'http://app-b.apps.localhost:8080' };
+
+// Publishes the change of state of the application, as the Application
+// Lifecycle Manager does
+const startApplication = (app: typeof APP_A) => mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'started' }));
+const endApplication = (app: typeof APP_A) => mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'ended' }));
 const VALID_BODY = { deviceClass: 'c', supportedTypes: ['t'] };
 
 let server: Server;
@@ -55,6 +63,7 @@ before(async () => {
     await startEntryServer();
     await startNotificationServer();
     await startProjection();
+    await startApplication(APP_A);
 });
 after(async () => {
     await stopEntryServer();
@@ -669,4 +678,44 @@ test('projeção no Redis: a partida limpa o que sobrou de outra execução', as
     fake.store.set('v100.0:remote-device:3c8a7d2f-5e4b-4a9c-8d1e-2f3a4b5c6d7e', { deviceClass: 'antigo' });
     await startProjection();
     assert.equal(fake.store.has('v100.0:remote-device:3c8a7d2f-5e4b-4a9c-8d1e-2f3a4b5c6d7e'), false);
+});
+
+test('associado: identidade da aplicacao em execucao; sem aplicacao, 107', async () => {
+    await endApplication(APP_A);
+    const none = await list('ciclo-a', ASSOCIATED);
+    expectError(none, 107);
+    await startApplication(APP_A);
+    assert.equal((await list('ciclo-a', ASSOCIATED)).status, 200);
+});
+
+test('fim da aplicacao associada (C.4.4): par encerrado com deviceUnavailable, pontos de entrada locais e ouvintes removidos', async () => {
+    const reg = await registerIn('ciclo-b');
+    const device = await open(reg.url);
+    const deviceInbox = inbox(device);
+    await waitFor(() => isConnected(reg.handle));
+    const url = (await list('ciclo-b', ASSOCIATED)).json.devices[0].url;
+    const client = await open(url);
+    const clientInbox = inbox(client);
+    const registry = registries.getRegistryByHandle(reg.handle);
+    await waitFor(() => registry.isPaired());
+
+    const res = await fetch(`${base}/v100.0/tv3/notifications/remote-device`, { headers: ASSOCIATED });
+    const listener = await res.json();
+    const listenerWs = await open(listener.url);
+
+    await endApplication(APP_A);
+    assert.equal(registry.isPaired(), false);
+    assert.equal(await closeCode(client), 4002);
+    assert.deepEqual(clientInbox.at(-1), { event: 'pairEnded', reason: 'deviceUnavailable' });
+    await waitFor(() => deviceInbox.some((m: any) => m.event === 'pairEnded'));
+    assert.equal(await connect(url), 404, 'ponto de entrada local removido');
+    await closeCode(listenerWs);
+    assert.equal(await connect(listener.url), 404, 'ouvinte removido');
+
+    // The next application has its own identity: a new local entry point.
+    await startApplication(APP_B);
+    const next = (await list('ciclo-b', ASSOCIATED)).json.devices[0].url;
+    assert.notEqual(next, url);
+    await endApplication(APP_B);
+    await startApplication(APP_A);
 });

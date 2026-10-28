@@ -4,6 +4,7 @@ import { RawData, WebSocket } from 'ws';
 import {
     CLOSE_DEVICE_BUSY, CLOSE_DEVICE_UNAVAILABLE, CLOSE_PREEMPTED, sendAndClose,
 } from './messages';
+import { onAssociatedEnded } from '../../../modules/associated-app';
 import { listeners } from '../notifications/listeners';
 import { projectRegistry } from './projection';
 import Registry from './registry';
@@ -251,6 +252,25 @@ class RegistryManager {
         return true;
     }
 
+    // C.4.4: releases the resources of the client: ends its communication
+    // pairs, telling it that the device is no longer available, and removes
+    // its local entry points and its notification listeners
+    public releaseClient(clientId: string): void {
+        for (const registry of this.registryByHandle.values()) {
+            const pair = registry.getPair();
+            if (pair?.clientId !== clientId) {
+                continue;
+            }
+            registry.setPair(undefined);
+            sendAndClose(pair.ws, { event: 'pairEnded', reason: 'deviceUnavailable' }, CLOSE_DEVICE_UNAVAILABLE);
+            this.notify(EventType.PAIR_ENDED, registry);
+            registry.notifyDevice({ event: 'pairEnded', clientType: pair.clientType });
+            this.project(registry.handle);
+        }
+        this.removeClientEntryPoints(clientId);
+        listeners.removeClientListeners(clientId);
+    }
+
     // Returns the token of the local entry point of the client for the
     // registry, creating it on the first call
     public addLocalEntryPoint(registry: Registry, clientId: string, clientType: ClientType): string {
@@ -334,3 +354,5 @@ class RegistryManager {
 
 // Single instance shared by the API and the entry server
 export const registries = new RegistryManager();
+
+onAssociatedEnded((associatedId) => registries.releaseClient(associatedId));

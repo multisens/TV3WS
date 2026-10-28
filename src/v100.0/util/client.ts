@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { returnError } from '../../util';
+import { currentAssociatedId } from '../../modules/associated-app';
 
 export type ClientType = 'associated' | 'standAlone';
 
@@ -11,20 +12,21 @@ export type LocalClient = {
 const CLIENT_CLASS_HEADER = 'X-TV30-Client-Class';
 const CLIENT_ID_HEADER = 'X-TV30-Client-Id';
 
-// The associated local client is unique and has a fixed identity
-// TODO: remove the local entry points of the associated client when its
-// application ends, a signal the application lifecycle component will
-// publish on the broker
-export const ASSOCIATED_CLIENT_ID = 'associated';
-
 // Stores in res.locals.client the class and the identity of the local
-// client, set by the edge; responds error 107 if the request does not come
-// from a local client
+// client: for the associated one, the running application; for the
+// stand-alone one, the clientid set by the edge. Responds error 107 if the
+// request does not come from a local client or no associated application
+// is running
 export function identifyLocalClient(req: Request, res: Response, next: NextFunction): void {
     const clientType = req.get(CLIENT_CLASS_HEADER);
 
     if (clientType === 'associated') {
-        const client: LocalClient = { clientId: ASSOCIATED_CLIENT_ID, clientType };
+        const clientId = currentAssociatedId();
+        if (clientId === undefined) {
+            returnError(res, 107, 'no associated application running');
+            return;
+        }
+        const client: LocalClient = { clientId, clientType };
         res.locals.client = client;
         next();
         return;

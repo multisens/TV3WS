@@ -48,6 +48,16 @@ class ListenerManager {
         return true;
     }
 
+    // Removes every listener of the client, as removeListener does for each
+    // one
+    public removeClientListeners(clientId: string): void {
+        for (const listener of [...this.listenerByHandle.values()]) {
+            if (listener.clientId === clientId) {
+                this.removeListener(listener.handle);
+            }
+        }
+    }
+
     public getByToken(token: string): Listener | undefined {
         return this.listenerByToken.get(token);
     }
