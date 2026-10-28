@@ -1,8 +1,8 @@
-import { Request, Response } from "express";
-import service from "./service";
-import { returnError } from "../../util";
-import { Device } from "./types";
-import { RegisterBody } from "./schema";
+import { Request, Response } from 'express';
+import service from './service';
+import { returnError } from '../../util';
+import { Device } from './types';
+import { RegisterBody } from './schema';
 
 async function POSTRemoteDevice(req: Request, res: Response): Promise<void> {
     const body = req.body as RegisterBody;

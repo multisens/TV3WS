@@ -1,37 +1,154 @@
-import core from "../../core";
-import mqttClient, { TOPICS } from "../../mqtt-client";
-import redis from "../../redis-client";
-import { execOrThrow } from "../../util/redis-result";
-import { ReqBody } from "../../api/remote-device/service";
-import RemoteDevice, { AppNode } from "./remote-device";
-import { WebSocketServer } from "ws";
-import { CapabilitiesMetadata } from "./types";
+import { WebSocketServer } from 'ws';
+import core from '../../core';
+import logger from '../../logger';
+import mqttClient, { TOPICS } from '../../mqtt-client';
+import redis from '../../redis-client';
+import { execOrThrow } from '../../util/redis-result';
+import { ReqBody } from '../../api/remote-device/service';
+import RemoteDevice, { AppNode } from './remote-device';
+import { CapabilitiesMetadata } from './types';
 
-// Os metadados do registro sao espelhados no Redis (remote-devices:index, remote-device:{h},
-// remote-devices:class:{c}) para outros componentes. Os WebSockets so existem na memoria do processo,
-// por isso o espelho e limpo no boot: entrada orfa mentiria sobre dispositivos conectados.
+// The registry metadata is mirrored in Redis (remote-devices:index,
+// remote-device:{handle}, remote-devices:class:{class}). The WebSockets exist
+// only in the memory of the process, so the mirror is cleared on boot.
+const INDEX_KEY = 'remote-devices:index';
+
 const devices = new Map<string, RemoteDevice>();
-const devclasses = new Map<string, string[]>();
+const handlesByClass = new Map<string, string[]>();
 
-// Tarefa de boot (server.ts, no primeiro 'ready' do Redis).
+// Boot task (server.ts, on the first 'ready' of Redis).
 export async function clearStoredRegistry(): Promise<void> {
-    const handles = await redis.smembers('remote-devices:index');
-    const keys = handles.map(h => `remote-device:${h}`);
-    const classKeys = await redis.keys('remote-devices:class:*');
-    const all = [...keys, ...classKeys, 'remote-devices:index'];
-    if (all.length > 0) await redis.del(...all);
+    const handles = await redis.smembers(INDEX_KEY);
+    const keys = handles.map(deviceKey);
+    const classKeys = await redis.keys(classKey('*'));
+    const all = [...keys, ...classKeys, INDEX_KEY];
+    if (all.length > 0) {
+        await redis.del(...all);
+    }
+}
+
+// Associates each node of the current application to the device it names,
+// if the device supports its type.
+export function associateAppNodes(): void {
+    const nodes: AppNode[] = core.app.nodes;
+    for (const node of nodes) {
+        const device = devices.get(node.device);
+        if (device?.support(node.mimeType)) {
+            device.setNode(node);
+        }
+    }
+}
+
+export function disassociateAppNodes(): void {
+    for (const device of devices.values()) {
+        device.removeNode();
+    }
+}
+
+// Storage first: if the write fails, the device does not enter the memory,
+// the WebSocketServer is closed and the error goes up.
+export async function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): Promise<RemoteDevice> {
+    const device = new RemoteDevice(body, handle, wss);
+    try {
+        await storeDevice(device);
+    } catch (err) {
+        device.terminate();
+        throw err;
+    }
+    devices.set(handle, device);
+
+    const deviceClass = device.getClass();
+    const handles = [...(handlesByClass.get(deviceClass) ?? []), handle];
+    handlesByClass.set(deviceClass, handles);
+    publishClass(deviceClass);
+    return device;
+}
+
+// C.6.15.2: replaces the class and the supported types of the registry of
+// the handle and moves it between the class indexes. The memory changes
+// before the mirror; false if there is no registry with the handle.
+export async function updateRemoteDevice(handle: string, body: ReqBody): Promise<boolean> {
+    const device = devices.get(handle);
+    if (!device) {
+        return false;
+    }
+    const previousClass = device.getClass();
+    device.update(body);
+    const currentClass = device.getClass();
+    if (currentClass !== previousClass) {
+        handlesByClass.set(previousClass, (handlesByClass.get(previousClass) ?? []).filter(h => h !== handle));
+        handlesByClass.set(currentClass, [...(handlesByClass.get(currentClass) ?? []), handle]);
+        publishClass(previousClass);
+        publishClass(currentClass);
+    }
+    await restoreDevice(device, previousClass);
+    return true;
+}
+
+// Storage first: if the removal fails, the device stays registered and
+// connected, and the error goes up.
+export async function removeRemoteDevice(handle: string): Promise<boolean> {
+    const device = devices.get(handle);
+    if (!device) {
+        return false;
+    }
+    const deviceClass = device.getClass();
+
+    await unstoreDevice(handle, deviceClass);
+    // Another removal of the same handle (API and closing of the socket) may
+    // have finished during the wait.
+    if (devices.get(handle) !== device) {
+        return true;
+    }
+
+    devices.delete(handle);
+    handlesByClass.set(deviceClass, (handlesByClass.get(deviceClass) ?? []).filter(h => h !== handle));
+    device.terminate();
+    logger.info(`Remote device ${handle} unregistered.`);
+    publishClass(deviceClass);
+    return true;
+}
+
+export function getDevicesByClass(classId: string): RemoteDevice[] {
+    const handles = handlesByClass.get(classId) ?? [];
+    const result: RemoteDevice[] = [];
+    for (const handle of handles) {
+        const device = devices.get(handle);
+        if (device) {
+            result.push(device);
+        }
+    }
+    return result;
+}
+
+export function getDeviceByHandle(handle: string): RemoteDevice | undefined {
+    return devices.get(handle);
+}
+
+// Capabilities of the device of the handle in the format of the
+// capabilities message; throws if there is no such device.
+export function requestDeviceCapabilities(handle: string): CapabilitiesMetadata[] {
+    const device = devices.get(handle);
+    if (!device) {
+        throw new Error(`Device with handle ${handle} not found`);
+    }
+    const result = device.getCapabilities().map((capability) => ({
+        type: capability.effectType,
+        capabilities: [
+            { name: 'state', value: capability.state },
+            { name: 'location', value: capability.location },
+            { name: 'preparationTime', value: capability.preparationTime },
+        ],
+    }));
+    return result as CapabilitiesMetadata[];
 }
 
 async function storeDevice(device: RemoteDevice): Promise<void> {
     const handle = device.getHandle();
     await execOrThrow(redis.multi()
-        .sadd('remote-devices:index', handle)
-        .sadd(`remote-devices:class:${device.getClass()}`, handle)
-        .hset(`remote-device:${handle}`, {
-            deviceClass: device.getClass(),
-            supportedTypes: JSON.stringify(device.getSupportedTypes()),
-            url: device.getUrl(),
-        }));
+        .sadd(INDEX_KEY, handle)
+        .sadd(classKey(device.getClass()), handle)
+        .hset(deviceKey(handle), deviceRecord(device)));
 }
 
 // Moves the registry from the index of the previous class to the one of the
@@ -39,158 +156,37 @@ async function storeDevice(device: RemoteDevice): Promise<void> {
 async function restoreDevice(device: RemoteDevice, previousClass: string): Promise<void> {
     const handle = device.getHandle();
     await execOrThrow(redis.multi()
-        .srem(`remote-devices:class:${previousClass}`, handle)
-        .sadd(`remote-devices:class:${device.getClass()}`, handle)
-        .hset(`remote-device:${handle}`, {
-            deviceClass: device.getClass(),
-            supportedTypes: JSON.stringify(device.getSupportedTypes()),
-            url: device.getUrl(),
-        }));
+        .srem(classKey(previousClass), handle)
+        .sadd(classKey(device.getClass()), handle)
+        .hset(deviceKey(handle), deviceRecord(device)));
 }
 
-async function unstoreDevice(handle: string, devclass: string): Promise<void> {
+async function unstoreDevice(handle: string, deviceClass: string): Promise<void> {
     await execOrThrow(redis.multi()
-        .srem('remote-devices:index', handle)
-        .srem(`remote-devices:class:${devclass}`, handle)
-        .del(`remote-device:${handle}`));
+        .srem(INDEX_KEY, handle)
+        .srem(classKey(deviceClass), handle)
+        .del(deviceKey(handle)));
 }
 
-function associateAppNodes() {
-  let nodes: AppNode[] = core.app.nodes;
-  nodes.forEach((node) => {
-    if (devices.has(node.device)) {
-      if (devices.get(node.device)?.support(node.mimeType)) {
-        devices.get(node.device)?.setNode(node);
-      }
-    }
-  });
+// Retained list of the handles of the class; empty when there is none.
+function publishClass(deviceClass: string): void {
+    const handles = handlesByClass.get(deviceClass) ?? [];
+    const payload = handles.length > 0 ? JSON.stringify(handles) : '';
+    mqttClient.publish(`${TOPICS.devices}/${deviceClass}`, payload, true);
 }
 
-function disassociateAppNodes() {
-  devices.forEach((dev) => {
-    dev.removeNode();
-  });
-}
-
-// Armazenamento primeiro: se a gravacao falhar, o dispositivo nao entra na
-// memoria, o WebSocketServer e fechado e o erro sobe.
-async function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): Promise<RemoteDevice> {
-  let device = new RemoteDevice(body, handle, wss);
-  try {
-    await storeDevice(device);
-  } catch (err) {
-    device.terminate();
-    throw err;
-  }
-  devices.set(handle, device);
-
-  let devclass = device.getClass();
-  if (devclasses.has(devclass)) {
-    devclasses.get(devclass)?.push(device.getHandle());
-  } else {
-    devclasses.set(devclass, [device.getHandle()]);
-  }
-
-  mqttClient.publish(`${TOPICS.devices}/${devclass}`, JSON.stringify(devclasses.get(devclass)), true);
-
-  return device;
-}
-
-// C.6.15.2: replaces the class and the supported types of the registry of
-// the handle and moves it between the class indexes. The memory changes
-// before the mirror; false if there is no registry with the handle.
-async function updateRemoteDevice(handle: string, body: ReqBody): Promise<boolean> {
-  const dev = devices.get(handle);
-  if (!dev) {
-    return false;
-  }
-  const previousClass = dev.getClass();
-  dev.update(body);
-  const currentClass = dev.getClass();
-  if (currentClass !== previousClass) {
-    const previousHandles = (devclasses.get(previousClass) ?? []).filter(h => h !== handle);
-    devclasses.set(previousClass, previousHandles);
-    devclasses.set(currentClass, [...(devclasses.get(currentClass) ?? []), handle]);
-    mqttClient.publish(`${TOPICS.devices}/${previousClass}`, previousHandles.length > 0 ? JSON.stringify(previousHandles) : '', true);
-    mqttClient.publish(`${TOPICS.devices}/${currentClass}`, JSON.stringify(devclasses.get(currentClass)), true);
-  }
-  await restoreDevice(dev, previousClass);
-  return true;
-}
-
-// Armazenamento primeiro: se a remocao falhar, o dispositivo continua
-// registrado e conectado, e o erro sobe.
-async function removeRemoteDevice(handle: string): Promise<boolean> {
-  const dev = devices.get(handle);
-  if (!dev) return false;
-  const devclass = dev.getClass();
-
-  await unstoreDevice(handle, devclass);
-  // outra remocao do mesmo handle (API e fechamento do socket) pode ter
-  // concluido durante a espera
-  if (devices.get(handle) !== dev) return true;
-
-  devices.delete(handle);
-  const handles = (devclasses.get(devclass) ?? []).filter(h => h !== handle);
-  devclasses.set(devclass, handles);
-  dev.terminate();
-  console.log(`Client ${handle} unregistered.`);
-
-  mqttClient.publish(`${TOPICS.devices}/${devclass}`, handles.length > 0 ? JSON.stringify(handles) : '', true);
-  return true;
-}
-
-function getDevicesByClass(classId: string): RemoteDevice[] {
-  if (!devclasses.has(classId)) return [];
-
-  let handles = devclasses.get(classId);
-  if (!handles) return [];
-
-  let result: RemoteDevice[] = [];
-  handles.forEach((handle) => {
-    if (devices.has(handle)) {
-      result.push(devices.get(handle)!);
-    }
-  });
-
-  return result;
-}
-
-function getDeviceByHandle(handle: string): RemoteDevice | undefined {
-  if (!devices.has(handle)) return undefined;
-  return devices.get(handle);
-}
-
-function requestDeviceCapabilities(handle: string): CapabilitiesMetadata[] {
-  const device = devices.get(handle);
-  if (!device) throw new Error(`Device with handle ${handle} not found`);
-
-  const deviceCapabilities = device.getCapabilities();
-
-  const result = deviceCapabilities.map((capability) => {
+function deviceRecord(device: RemoteDevice): Record<string, string> {
     return {
-      type: capability.effectType,
-      capabilities: [
-        { name: "state", value: capability.state },
-        { name: "location", value: capability.location },
-        {
-          name: "preparationTime",
-          value: capability.preparationTime,
-        },
-      ],
+        deviceClass: device.getClass(),
+        supportedTypes: JSON.stringify(device.getSupportedTypes()),
+        url: device.getUrl(),
     };
-  });
-
-  return result as CapabilitiesMetadata[];
 }
 
-export {
-  associateAppNodes,
-  disassociateAppNodes,
-  addRemoteDevice,
-  updateRemoteDevice,
-  removeRemoteDevice,
-  getDevicesByClass,
-  getDeviceByHandle,
-  requestDeviceCapabilities,
-};
+function deviceKey(handle: string): string {
+    return `remote-device:${handle}`;
+}
+
+function classKey(deviceClass: string): string {
+    return `remote-devices:class:${deviceClass}`;
+}

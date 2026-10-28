@@ -1,10 +1,10 @@
-import { v4 as uuidv4 } from "uuid";
-import * as manager from "../../modules/remotedevice-manager/manager";
-import { closeEntryPoint, openLocalEntryPoint, openRemoteDeviceEntryPoint } from "../../modules/remotedevice-manager/entry-point";
-import { ApiError } from "../../util";
-import logger from "../../logger";
-import { Device } from "./types";
-import { RegisterBody } from "./schema";
+import { v4 as uuidv4 } from 'uuid';
+import * as manager from '../../modules/remotedevice-manager/manager';
+import { closeEntryPoint, openLocalEntryPoint, openRemoteDeviceEntryPoint } from '../../modules/remotedevice-manager/entry-point';
+import { ApiError } from '../../util';
+import logger from '../../logger';
+import { Device } from './types';
+import { RegisterBody } from './schema';
 
 export type ReqBody = RegisterBody;
 
