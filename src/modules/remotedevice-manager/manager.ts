@@ -5,6 +5,8 @@ import mqttClient, { TOPICS } from '../../mqtt-client';
 import redis from '../../redis-client';
 import { execOrThrow } from '../../util/redis-result';
 import { ReqBody } from '../../api/remote-device/service';
+import { onAssociatedEnded } from '../associated-app';
+import { onClientBlocked } from '../client-revocation';
 import RemoteDevice, { AppNode } from './remote-device';
 import { CapabilitiesMetadata } from './types';
 
@@ -47,8 +49,8 @@ export function disassociateAppNodes(): void {
 
 // Storage first: if the write fails, the device does not enter the memory,
 // the WebSocketServer is closed and the error goes up.
-export async function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer): Promise<RemoteDevice> {
-    const device = new RemoteDevice(body, handle, wss);
+export async function addRemoteDevice(body: ReqBody, handle: string, wss: WebSocketServer, registeredBy: string): Promise<RemoteDevice> {
+    const device = new RemoteDevice(body, handle, wss, registeredBy);
     try {
         await storeDevice(device);
     } catch (err) {
@@ -107,6 +109,16 @@ export async function removeRemoteDevice(handle: string): Promise<boolean> {
     logger.info(`Remote device ${handle} unregistered.`);
     publishClass(deviceClass);
     return true;
+}
+
+// C.4.4: removes the registrations made by the client.
+export async function releaseClient(clientId: string): Promise<void> {
+    const handles = [...devices.values()]
+        .filter(device => device.registeredBy === clientId)
+        .map(device => device.getHandle());
+    for (const handle of handles) {
+        await removeRemoteDevice(handle);
+    }
 }
 
 export function getDevicesByClass(classId: string): RemoteDevice[] {
@@ -180,6 +192,7 @@ function deviceRecord(device: RemoteDevice): Record<string, string> {
         deviceClass: device.getClass(),
         supportedTypes: JSON.stringify(device.getSupportedTypes()),
         url: device.getUrl(),
+        registeredBy: device.registeredBy,
     };
 }
 
@@ -190,3 +203,14 @@ function deviceKey(handle: string): string {
 function classKey(deviceClass: string): string {
     return `remote-devices:class:${deviceClass}`;
 }
+
+// Without an API to answer, a storage failure of the release goes to the
+// log.
+function releaseClientLogged(clientId: string): void {
+    releaseClient(clientId).catch((err: Error) => {
+        logger.error(`[remote-devices] release of the client ${clientId} failed: ${err.message}`);
+    });
+}
+
+onAssociatedEnded(releaseClientLogged);
+onClientBlocked(releaseClientLogged);

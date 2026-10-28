@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { returnError } from '../../util';
 import { currentAssociatedId } from '../../modules/associated-app';
+import { CLIENT_CLASS_HEADER, CLIENT_ID_HEADER } from '../../modules/client-identity';
 
 export type ClientType = 'associated' | 'standAlone';
 
@@ -8,9 +9,6 @@ export type LocalClient = {
     clientId: string;
     clientType: ClientType;
 };
-
-const CLIENT_CLASS_HEADER = 'X-TV30-Client-Class';
-const CLIENT_ID_HEADER = 'X-TV30-Client-Id';
 
 // Stores in res.locals.client the class and the identity of the local
 // client: for the associated one, the running application; for the

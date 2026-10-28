@@ -6,7 +6,7 @@ import { RegisterBody } from './schema';
 
 async function POSTRemoteDevice(req: Request, res: Response): Promise<void> {
     const body = req.body as RegisterBody;
-    const response = await service.createWebSocket(body);
+    const response = await service.createWebSocket(body, res.locals.clientId);
     res.status(200).json(response);
 }
 

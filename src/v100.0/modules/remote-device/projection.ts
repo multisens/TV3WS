@@ -57,5 +57,6 @@ function projectionOf(registry: Registry): Record<string, string> {
         state: registry.isConnected() ? 'connected' : 'registered',
         paired: String(registry.isPaired()),
         disconnectedAt: String(registry.getDisconnectedAt()),
+        registeredBy: registry.registeredBy,
     };
 }

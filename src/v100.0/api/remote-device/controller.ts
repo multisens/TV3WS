@@ -4,7 +4,7 @@ import service from './service';
 
 function registerDevice(req: Request, res: Response): void {
     const body = req.body as RegisterBody;
-    const response = service.registerDevice(body);
+    const response = service.registerDevice(body, res.locals.clientId);
     res.status(200).json(response);
 }
 

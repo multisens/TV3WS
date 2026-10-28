@@ -3,11 +3,12 @@ import controller from './controller';
 import { RegisterBodySchema } from './schema';
 import { validateSchema } from '../../util/validate';
 import { identifyLocalClient } from '../../util/client';
+import { requireClientId } from '../../../modules/client-identity';
+
 const router: Router = express.Router();
 
-
 // C.6.15.2 - Registering a remote device
-router.post('/', validateSchema(RegisterBodySchema), controller.registerDevice);
+router.post('/', validateSchema(RegisterBodySchema), requireClientId, controller.registerDevice);
 
 // C.6.15.2 - Update a remote device registry
 router.post('/:handle', validateSchema(RegisterBodySchema), controller.updateDevice);

@@ -21,11 +21,11 @@ const pendingLocalEntryPoints = new Map<string, Promise<string>>();
 
 // Opens the entry point of the device and then registers it, with the URL
 // of the port that is listening.
-async function createWebSocket(body: ReqBody): Promise<Response> {
+async function createWebSocket(body: ReqBody, registeredBy: string): Promise<Response> {
     const wsServer = await openRemoteDeviceEntryPoint();
     const uuid = uuidv4();
 
-    const device = await manager.addRemoteDevice(body, uuid, wsServer);
+    const device = await manager.addRemoteDevice(body, uuid, wsServer, registeredBy);
     logger.info(`Remote device ${device.getHandle()} registered.`);
 
     return {

@@ -35,10 +35,14 @@ function stub(rel: string, exports: object): void {
 const fakeCore = { app: { sid: '', id: '', url: '', nodes: [] }, server: { url: 'localhost' } };
 stub('redis-client', { default: fake.redis });
 stub('core', { default: fakeCore });
+const topicHandlers = new Map<string, ((m: string) => void)[]>();
+// Delivers a message to the handlers of the topic, as the arrival from the
+// broker.
+const deliver = (topic: string, message: string) => (topicHandlers.get(topic) ?? []).forEach(h => h(message));
 stub('mqtt-client', {
     default: {
         publish(t: string, m: string) { published.push([t, m]); },
-        addTopicHandler() { /* nothing */ },
+        addTopicHandler(t: string, f: (m: string) => void) { topicHandlers.set(t, [...(topicHandlers.get(t) ?? []), f]); },
         removeTopicHandler() { /* nothing */ },
         parseTopic(t: string) { return t; },
     },
@@ -115,7 +119,10 @@ before(async () => {
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
 
 const BASE = '/tv3/remote-device';
-async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = {}) {
+// Class and identity of the client, as the edge writes them for the device
+// that registers itself.
+const DEVICE_CLIENT = { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-1' };
+async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = DEVICE_CLIENT) {
     const res = await fetch(`${root}${BASE}${route}`, {
         method,
         headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
@@ -398,3 +405,56 @@ test('C.6.15.2 (2.0): atualizacao troca classe e tipos e move o registro de clas
     expectError(await call('POST', '/nao-existe', BODY), 305);
     assert.equal((await call('DELETE', `/${handle}`)).status, 200);
 });
+
+test('C.6.15.2 (2.0): sem identidade do cliente, 107; com ela, guardada em registeredBy no dispositivo e no espelho', async () => {
+    expectError(await call('POST', '/', BODY, {}), 107);
+    const devPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(manager.getDeviceByHandle(r.json.handle)!.registeredBy, 'dispositivo-1');
+    assert.equal((store.get(`remote-device:${r.json.handle}`) as Record<string, string>).registeredBy, 'dispositivo-1');
+    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
+});
+
+test('2.0 (C.4.4): bloqueio do cliente e fim da aplicacao associada removem os registros que eles fizeram', async () => {
+    const devPort = await freePort();
+    portRange(devPort);
+    const blocked = await call('POST', '/', BODY);
+    const otherPort = await freePort();
+    portRange(otherPort);
+    const other = await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-2' });
+    assert.equal(other.status, 200, JSON.stringify(other.json));
+
+    deliver('aop/access-panel/client-blocked', 'dispositivo-1');
+    await waitForCondition(() => manager.getDeviceByHandle(blocked.json.handle) === undefined);
+    assert.equal(await listening(devPort), false, 'porta do registro removido fechada');
+    assert.ok(manager.getDeviceByHandle(other.json.handle), 'registro de outro cliente continua');
+
+    deliver('aop/application-lifecycle-manager/application-state',
+        JSON.stringify({ serviceContextId: 's', appId: 'a', origin: 'http://a', state: 'ended' }));
+    assert.ok(manager.getDeviceByHandle(other.json.handle), 'fim de aplicacao nao remove registro de cliente nao local');
+    assert.equal((await call('DELETE', `/${other.json.handle}`)).status, 200);
+});
+
+test('2.0 (C.4.4): registro do associado tem a identidade da aplicacao em execucao e sai no fim dela', async () => {
+    const app = { serviceContextId: 'urn:tv30:service:a', appId: 'app-a', origin: 'http://app-a' };
+    const STATE = 'aop/application-lifecycle-manager/application-state';
+    deliver(STATE, JSON.stringify({ ...app, state: 'started' }));
+    const devPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'associated' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(manager.getDeviceByHandle(r.json.handle)!.registeredBy, 'urn:tv30:service:a/app-a');
+    deliver(STATE, JSON.stringify({ ...app, state: 'ended' }));
+    await waitForCondition(() => manager.getDeviceByHandle(r.json.handle) === undefined);
+    expectError(await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'associated' }), 107);
+});
+
+async function waitForCondition(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (!condition()) {
+        assert.ok(Date.now() - start < timeoutMs, 'condition not reached in time');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}

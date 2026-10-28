@@ -16,6 +16,9 @@ export default class Registry {
     public readonly deviceId = uuidv4();
     public readonly token = generateToken();
 
+    // Client that made the registration (C.4.4)
+    public readonly registeredBy: string;
+
     protected deviceClass: string;
     protected supportedTypes: string[];
 
@@ -25,7 +28,8 @@ export default class Registry {
     protected disconnectedAt: number;
     protected pair?: Pair;
 
-    constructor(deviceClass: string, supportedTypes: string[]) {
+    constructor(deviceClass: string, supportedTypes: string[], registeredBy: string) {
+        this.registeredBy = registeredBy;
         this.deviceClass = deviceClass;
         this.supportedTypes = supportedTypes;
         this.disconnectedAt = Date.now();

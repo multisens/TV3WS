@@ -5,6 +5,7 @@ import {
     CLOSE_DEVICE_BUSY, CLOSE_DEVICE_UNAVAILABLE, CLOSE_PREEMPTED, sendAndClose,
 } from './messages';
 import { onAssociatedEnded } from '../../../modules/associated-app';
+import { onClientBlocked } from '../../../modules/client-revocation';
 import { listeners } from '../notifications/listeners';
 import { projectRegistry } from './projection';
 import Registry from './registry';
@@ -42,8 +43,8 @@ class RegistryManager {
     protected registryByClass = new Map<string, Set<Registry>>();
     protected sequenceByClass = new Map<string, number>();
 
-    public addRegistry(deviceClass: string, supportedTypes: string[]): Registry {
-        const registry = new Registry(deviceClass, supportedTypes);
+    public addRegistry(deviceClass: string, supportedTypes: string[], registeredBy: string): Registry {
+        const registry = new Registry(deviceClass, supportedTypes, registeredBy);
         this.registryByHandle.set(registry.handle, registry);
         this.entryPointByToken.set(registry.token, { kind: 'device', registry });
         this.addToClass(registry);
@@ -252,10 +253,16 @@ class RegistryManager {
         return true;
     }
 
-    // C.4.4: releases the resources of the client: ends its communication
-    // pairs, telling it that the device is no longer available, and removes
-    // its local entry points and its notification listeners
+    // C.4.4: releases the resources of the client: removes the registrations
+    // it made, ends its communication pairs, telling it that the device is no
+    // longer available, and removes its local entry points and its
+    // notification listeners
     public releaseClient(clientId: string): void {
+        for (const registry of [...this.registryByHandle.values()]) {
+            if (registry.registeredBy === clientId) {
+                this.removeRegistry(registry.handle);
+            }
+        }
         for (const registry of this.registryByHandle.values()) {
             const pair = registry.getPair();
             if (pair?.clientId !== clientId) {
@@ -356,3 +363,4 @@ class RegistryManager {
 export const registries = new RegistryManager();
 
 onAssociatedEnded((associatedId) => registries.releaseClient(associatedId));
+onClientBlocked((clientId) => registries.releaseClient(clientId));

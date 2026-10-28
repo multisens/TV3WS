@@ -76,10 +76,14 @@ beforeEach(() => {
 
 type Reply = { status: number; apiVersion: string | null; json: any };
 
+// Class and identity of the client, as the edge writes them for the device
+// that registers itself.
+const DEVICE_CLIENT = { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-1' };
+
 async function call(method: string, route: string, body?: unknown, raw?: string): Promise<Reply> {
-    const init: RequestInit = { method };
+    const init: RequestInit = { method, headers: DEVICE_CLIENT };
     if (body !== undefined || raw !== undefined) {
-        init.headers = { 'Content-Type': 'application/json' };
+        init.headers = { 'Content-Type': 'application/json', ...DEVICE_CLIENT };
         init.body = raw ?? JSON.stringify(body);
     }
     const res = await fetch(`${base}${route}`, init);
@@ -639,6 +643,7 @@ test('projeção no Redis: registro, conexão, par, queda e cancelamento, sem o 
         state: 'connected',
         paired: 'false',
         disconnectedAt: String(registry.getDisconnectedAt()),
+        registeredBy: 'dispositivo-1',
     });
 
     await open(localUrlOf(registry, 'sa', 'standAlone'));
@@ -717,5 +722,41 @@ test('fim da aplicacao associada (C.4.4): par encerrado com deviceUnavailable, p
     const next = (await list('ciclo-b', ASSOCIATED)).json.devices[0].url;
     assert.notEqual(next, url);
     await endApplication(APP_B);
+    await startApplication(APP_A);
+});
+
+test('registro (C.6.15.2): sem identidade do cliente, 107; com ela, guardada em registeredBy', async () => {
+    const res = await fetch(`${base}${v100('')}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(VALID_BODY) });
+    assert.equal(res.status, 404);
+    assert.equal((await res.json()).error, 107);
+    const reg = await register();
+    assert.equal(registries.getRegistryByHandle(reg.handle).registeredBy, 'dispositivo-1');
+    await waitFor(() => projected(reg.handle)?.registeredBy === 'dispositivo-1');
+});
+
+test('bloqueio do cliente (C.4.2.2, C.4.4): registros que ele fez removidos; par, pontos de entrada locais e ouvintes do bloqueado liberados', async () => {
+    const { handle, registry, deviceInbox } = await connectedDevice();
+    const url = localUrlOf(registry, 'cliente-1', 'standAlone');
+    const client = await open(url);
+    await waitFor(() => registry.isPaired());
+
+    await mqtt.deliver('aop/access-panel/client-blocked', 'cliente-1');
+    assert.equal(registry.isPaired(), false);
+    assert.equal(await closeCode(client), 4002);
+    await waitFor(() => deviceInbox.some((m: any) => m.event === 'pairEnded'));
+    assert.equal(await connect(url), 404, 'ponto de entrada local do bloqueado removido');
+    assert.ok(registries.getRegistryByHandle(handle), 'o registro de outro cliente continua');
+
+    await mqtt.deliver('aop/access-panel/client-blocked', 'dispositivo-1');
+    assert.equal(registries.getRegistryByHandle(handle), undefined, 'registro do bloqueado removido');
+    await waitFor(() => projected(handle) === undefined);
+});
+
+test('fim da aplicacao associada: registros que ela fez sao removidos', async () => {
+    const res = await fetch(`${base}${v100('')}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...ASSOCIATED }, body: JSON.stringify(VALID_BODY) });
+    const reg = await res.json();
+    assert.equal(registries.getRegistryByHandle(reg.handle).registeredBy, `${APP_A.serviceContextId}/${APP_A.appId}`);
+    await endApplication(APP_A);
+    assert.equal(registries.getRegistryByHandle(reg.handle), undefined);
     await startApplication(APP_A);
 });

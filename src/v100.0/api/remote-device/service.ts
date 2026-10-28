@@ -26,9 +26,9 @@ export type DeviceListResponse = {
 // Receiver limit on devices to register
 const MAX_REGISTRATIONS = positiveIntFromEnv('MAX_REGISTRATIONS');
 
-// C.6.15.2: creates the registration and returns its handle and the URL of
-// its entry point
-function registerDevice(body: RegisterBody): RegisterResponse {
+// C.6.15.2: creates the registration of the client and returns its handle
+// and the URL of its entry point
+function registerDevice(body: RegisterBody, registeredBy: string): RegisterResponse {
     if (!isEntryServerListening()) {
         throw new ApiError(200, 'entry server is not listening');
     }
@@ -40,7 +40,7 @@ function registerDevice(body: RegisterBody): RegisterResponse {
             throw new ApiError(200, 'maximum number of registries exceeded');
         }
     }
-    const registry = registries.addRegistry(body.deviceClass, body.supportedTypes);
+    const registry = registries.addRegistry(body.deviceClass, body.supportedTypes, registeredBy);
     const url = entryPointUrl(registry.token);
     return { handle: registry.handle, url };
 }

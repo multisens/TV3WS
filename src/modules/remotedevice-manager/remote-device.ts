@@ -47,6 +47,9 @@ export type NodeInterface = {
 const SRC_PROPERTY = 'src';
 
 export default class RemoteDevice {
+    // Client that made the registration (C.4.4)
+    public readonly registeredBy: string;
+
     protected handle: string;
     protected deviceClass: string;
     protected supportedTypes: string[];
@@ -64,7 +67,8 @@ export default class RemoteDevice {
     protected interfaceIds?: string[];
     protected properties: Map<string, string>;
 
-    constructor(body: ReqBody, handle: string, wss: WebSocketServer) {
+    constructor(body: ReqBody, handle: string, wss: WebSocketServer, registeredBy: string) {
+        this.registeredBy = registeredBy;
         this.deviceClass = body.deviceClass;
         this.supportedTypes = body.supportedTypes;
         this.handle = handle;
