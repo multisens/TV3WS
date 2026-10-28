@@ -1,6 +1,8 @@
-// Duble de Redis em memoria, so com os comandos que o tv3ws usa. Falha injetavel como o ioredis com o Redis
-// fora: comando avulso rejeita, pipeline resolve [erro, null] por entrada, MULTI rejeita no EXEC. FCALL imita
-// o efeito das funcoes tv30 sem conferir o esquema (testado em infra/redis/test); recusar() simula TV30ESQUEMA.
+// In-memory Redis double, with only the commands tv3ws uses. Injectable
+// failure as ioredis with Redis down: a single command rejects, a pipeline
+// resolves [error, null] per entry, MULTI rejects on EXEC. FCALL mimics the
+// effect of the tv30 functions without checking the schema; recusar()
+// simulates TV30SCHEMA.
 type Value = string | Set<string> | Record<string, string>;
 
 export const FAKE_REDIS_ERROR = 'redis indisponivel (duble de teste)';
@@ -22,7 +24,7 @@ export function createFakeRedis() {
     };
     const glob = (pattern: string) => new RegExp('^' + pattern.split('*').map(s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
 
-    // comandos sincronos; o wrapper async aplica a falha injetada
+    // Synchronous commands; the async wrapper applies the injected failure.
     const ops = {
         get: (k: string) => (typeof store.get(k) === 'string' ? store.get(k) as string : null),
         set: (k: string, v: string) => { store.set(k, v); return 'OK'; },
@@ -56,12 +58,12 @@ export function createFakeRedis() {
         smembers: (k: string) => [...(set(k) ?? [])],
         scard: (k: string) => set(k)?.size ?? 0,
         keys: (p: string) => [...store.keys()].filter(k => glob(p).test(k)),
-        // varredura numa passada so (cursor '0' de volta)
+        // Scan in a single pass (cursor '0' back).
         scan: (_cursor: string, _m: string, p: string) => ['0', [...store.keys()].filter(k => glob(p).test(k))] as [string, string[]],
-        // so FCALL <funcao> 0 ...args (ver funcoes abaixo)
+        // Only FCALL <function> 0 ...args (see the functions below).
         call: (cmd: string, nome: string, numkeys: number | string, ...args: string[]) => {
             if (String(cmd).toUpperCase() !== 'FCALL') throw new Error(`call: comando ${cmd} nao suportado pelo duble`);
-            if (Number(numkeys) !== 0) throw new Error(`TV30ESQUEMA ${nome}: chamada com numkeys ${numkeys}`);
+            if (Number(numkeys) !== 0) throw new Error(`TV30SCHEMA ${nome}: call with numkeys ${numkeys}`);
             fcalls.push([nome, ...args.map(String)]);
             const recusa = recusas.get(nome);
             if (recusa !== undefined) throw new Error(recusa);
@@ -71,19 +73,19 @@ export function createFakeRedis() {
         },
     };
 
-    // pares campo valor a partir de args[i]
+    // Field and value pairs from args[i].
     const paresDe = (a: string[], i = 0): Record<string, string> => {
         const h: Record<string, string> = {};
         for (let k = i; k + 1 < a.length; k += 2) h[a[k]] = a[k + 1];
         return h;
     };
-    // efeito das funcoes tv30 que o tv3ws chama (infra/redis/funcoes.lua)
+    // Effect of the tv30 functions tv3ws calls (infra/redis/functions.lua).
     const funcoes: Record<string, (a: string[]) => unknown> = {
-        tv30_sessao_usuario: ([v]) => { store.set('session:current-user', v); return 1; },
-        tv30_sessao_servico_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
-        tv30_sessao_servico: (a) => { store.set('session:current-service', paresDe(a)); return 1; },
-        tv30_atributos_emissora: ([id, scid, ...a]) => {
-            if (!set('users:index')?.has(id)) throw new Error(`TV30ESQUEMA tv30_atributos_emissora: user:${id}:broadcaster-attrs:${scid} perfil "${id}" fora de users:index (invariante perfil-dependentes)`);
+        tv30_session_user: ([v]) => { store.set('session:current-user', v); return 1; },
+        tv30_session_service_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
+        tv30_session_service: (a) => { store.set('session:current-service', paresDe(a)); return 1; },
+        tv30_broadcaster_attributes: ([id, scid, ...a]) => {
+            if (!set('users:index')?.has(id)) throw new Error(`TV30SCHEMA tv30_broadcaster_attributes: user:${id}:broadcaster-attrs:${scid} profile "${id}" outside users:index (invariant profile-dependents)`);
             const k = `user:${id}:broadcaster-attrs:${scid}`;
             const h = { ...(hash(k) ?? {}) };
             const pedidos = paresDe(a);
@@ -91,19 +93,22 @@ export function createFakeRedis() {
             if (Object.keys(h).length) store.set(k, h); else store.delete(k);
             return Object.keys(pedidos).length;
         },
-        tv30_cliente_grava: ([id, ...a]) => { ops.hset(`client:${id}`, paresDe(a)); return 1; },
-        tv30_cliente_autoriza: ([id, ...a]) => {
+        tv30_client_write: ([id, ...a]) => { ops.hset(`client:${id}`, paresDe(a)); return 1; },
+        tv30_client_authorize: ([id, ...a]) => {
             ops.hset(`client:${id}`, paresDe(a));
             ops.srem('clients:blocked', id);
             ops.sadd('clients:authorized', id);
             return 1;
         },
-        tv30_cliente_bloqueia: ([id]) => { ops.srem('clients:authorized', id); ops.sadd('clients:blocked', id); return 1; },
-        tv30_cliente_inclui_autorizado: ([id]) => {
+        tv30_client_block: ([id]) => { ops.srem('clients:authorized', id); ops.sadd('clients:blocked', id); return 1; },
+        tv30_client_add_authorized: ([id]) => {
             if (set('clients:blocked')?.has(id)) return 0;
-            if (!hash(`client:${id}`)) throw new Error(`TV30ESQUEMA tv30_cliente_inclui_autorizado: client:${id} ausente (invariante autorizado-tem-registro)`);
+            if (!hash(`client:${id}`)) throw new Error(`TV30SCHEMA tv30_client_add_authorized: client:${id} absent: only who has the record enters clients:authorized (invariant authorized-has-record)`);
             return ops.sadd('clients:authorized', id);
         },
+        tv30_v100_remote_device_write: ([handle, ...a]) => { store.set(`v100.0:remote-device:${handle}`, paresDe(a)); return 1; },
+        tv30_v100_remote_device_remove: ([handle]) => ops.del(`v100.0:remote-device:${handle}`),
+        tv30_v100_remote_devices_clear: () => ops.del(...ops.keys('v100.0:remote-device:*')),
     };
     type OpName = keyof typeof ops;
 
@@ -142,7 +147,8 @@ export function createFakeRedis() {
             down = v;
             singleDown = v && scope === 'all';
         },
-        // mensagem = recusa da funcao como o Redis a manda; undefined = volta ao normal
+        // message = refusal of the function as Redis sends it; undefined goes
+        // back to normal.
         recusar(nome: string, mensagem?: string) {
             if (mensagem === undefined) recusas.delete(nome);
             else recusas.set(nome, mensagem);

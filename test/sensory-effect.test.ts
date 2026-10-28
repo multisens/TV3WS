@@ -1,5 +1,6 @@
-// C.6.16.3: no comando valem as propriedades da Tabela A.30 e a posicao da A.3.19; outro nome da 101.
-// A capacidade de posicao do aparelho e "location" (Tabela A.45).
+// C.6.16.3: the command accepts the properties of Table A.30 and the
+// position of A.3.19; any other name gives 101. The position capability of
+// the device is "location" (Table A.45).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';

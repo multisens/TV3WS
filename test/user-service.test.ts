@@ -1,5 +1,7 @@
-// APIs de usuario (C.6.14) com Redis e MQTT por dubles. O tv3ws so le perfis (nao assina aop/users, nao semeia
-// users:index, nao grava lastAccess); erro de Redis em pipeline vira 404 {error:200}, nao resposta "valida".
+// User APIs (C.6.14) with Redis and MQTT by doubles. tv3ws only reads
+// profiles (does not subscribe to aop/users, does not seed users:index,
+// does not write lastAccess); a Redis error in a pipeline becomes 404
+// {error:200}, not a "valid" response.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -11,7 +13,8 @@ import { createFakeRedis } from './helpers/fake-redis';
 
 const fake = createFakeRedis();
 const store = fake.store;
-// ids de perfil em UUID (Tabela 7): o duble nao confere o esquema, mas os ids sao do formato que o Redis aceita
+// Profile ids as UUIDs (Table 7): the double does not check the schema, but
+// the ids have the format Redis accepts.
 const U1 = '0b6f3e2a-7c1d-4e5f-9a8b-2c3d4e5f6a7b';
 const U9 = '9d8c7b6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const PX = '3f2e1d0c-9b8a-4f7e-a6d5-c4b3a2918070';
@@ -39,7 +42,8 @@ stub('mqtt-client', {
     TOPICS: { current_user: 'aop/currentUser', current_service: 'aop/currentService' },
 });
 
-// arquivo de perfis valido, para conferir que o tv3ws nao semeia users:index com ele
+// A valid profile file, to check that tv3ws does not seed users:index with
+// it.
 process.env.USER_DATA_FILE = path.join(__dirname, '..', 'user-files', 'userData.json');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -84,7 +88,7 @@ function seedProfiles(svc: string) {
     store.set(`user:${U1}:consent`, new Set([svc]));
 }
 
-// --- so leitura de perfis ----------------------------------------------------------
+// --- profiles read only -----------------------------------------------------
 test('nao assina aop/users; assina aop/currentUser e aop/currentService', () => {
     assert.ok(!handlers.has('aop/users'));
     assert.ok(handlers.has('aop/currentUser'));
@@ -124,7 +128,7 @@ test('POST current-user (Tabela C.73): 305 para id inexistente, 405 sem acesso, 
     assert.equal(published.length, antes);
 });
 
-// --- falha do Redis -----------------------------------------------------------------
+// --- Redis failure ----------------------------------------------------------
 test('Redis normal: a listagem C.6.14.1 devolve o perfil visivel', async () => {
     seedProfiles('svc-a');
     const r = await call('POST', '/current-service/users', {});
@@ -158,17 +162,17 @@ test('Redis fora do ar: current-user e atributos respondem 404 {error:200}', asy
     } finally { fake.setDown(false); }
 });
 
-// --- escritas pelas funcoes do Redis -------------------------------------------------
-test('escritas da sessao saem por FCALL (tv30_sessao_usuario, tv30_sessao_servico_id)', async () => {
+// --- writes by the Redis functions ------------------------------------------
+test('escritas da sessao saem por FCALL (tv30_session_user, tv30_session_service_id)', async () => {
     fake.fcalls.length = 0;
     await handlers.get('aop/currentUser')!(U9);
     await handlers.get('aop/currentService')!('svc-z');
     seedProfiles('svc-a');
     assert.equal((await call('POST', '/current-service/users/current-user', { id: U1 })).status, 200);
-    assert.deepEqual(fake.fcalls, [['tv30_sessao_usuario', U9], ['tv30_sessao_servico_id', 'svc-z'], ['tv30_sessao_usuario', U1]]);
+    assert.deepEqual(fake.fcalls, [['tv30_session_user', U9], ['tv30_session_service_id', 'svc-z'], ['tv30_session_user', U1]]);
 });
 
-test('C.6.14.5 pela funcao tv30_atributos_emissora: grava, vazio remove, resposta com o alterado', async () => {
+test('C.6.14.5 pela funcao tv30_broadcaster_attributes: grava, vazio remove, resposta com o alterado', async () => {
     seedProfiles('svc-a');
     fake.fcalls.length = 0;
     let r = await call('POST', `/svc-a/users/${U1}`, { cor: 'azul', tam: 'G' });
@@ -177,8 +181,9 @@ test('C.6.14.5 pela funcao tv30_atributos_emissora: grava, vazio remove, respost
     r = await call('POST', `/svc-a/users/${U1}`, { cor: '' });
     assert.equal(r.status, 200, r.text);
     assert.deepEqual(store.get(`user:${U1}:broadcaster-attrs:svc-a`), { tam: 'G' });
-    assert.deepEqual(fake.fcalls, [['tv30_atributos_emissora', U1, 'svc-a', 'cor', 'azul', 'tam', 'G'], ['tv30_atributos_emissora', U1, 'svc-a', 'cor', '']]);
-    // basico protegido: 101 do tv3ws, sem chegar a funcao
+    assert.deepEqual(fake.fcalls, [['tv30_broadcaster_attributes', U1, 'svc-a', 'cor', 'azul', 'tam', 'G'], ['tv30_broadcaster_attributes', U1, 'svc-a', 'cor', '']]);
+    // Protected basic attribute: 101 from tv3ws, without reaching the
+    // function.
     fake.fcalls.length = 0;
     expectError(await call('POST', `/svc-a/users/${U1}`, { nickname: 'x' }), 101);
     assert.deepEqual(fake.fcalls, []);
@@ -189,8 +194,8 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
     const logs: string[] = [];
     const errorOrig = console.error;
     console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
-    const msg = 'TV30ESQUEMA tv30_sessao_usuario: session:current-user valor: tem 65 caracteres, maximo 64';
-    fake.recusar('tv30_sessao_usuario', msg);
+    const msg = 'TV30SCHEMA tv30_session_user: session:current-user value: has 65 characters, maximum 64';
+    fake.recusar('tv30_session_user', msg);
     const publicados = published.length;
     try {
         const r = await call('POST', '/current-service/users/current-user', { id: U1 });
@@ -200,21 +205,21 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
         assert.equal(published.length, publicados, 'nao publica o que nao gravou');
         await assert.rejects(Promise.resolve(handlers.get('aop/currentUser')!('x'.repeat(65))), { message: msg });
     } finally {
-        fake.recusar('tv30_sessao_usuario');
+        fake.recusar('tv30_session_user');
         console.error = errorOrig;
     }
-    fake.recusar('tv30_atributos_emissora', `TV30ESQUEMA tv30_atributos_emissora: user:${U1}:broadcaster-attrs:svc-a perfil "${U1}" fora de users:index (invariante perfil-dependentes)`);
+    fake.recusar('tv30_broadcaster_attributes', `TV30SCHEMA tv30_broadcaster_attributes: user:${U1}:broadcaster-attrs:svc-a profile "${U1}" outside users:index (invariant profile-dependents)`);
     console.error = () => undefined;
     try {
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'azul' }), 200);
     } finally {
-        fake.recusar('tv30_atributos_emissora');
+        fake.recusar('tv30_broadcaster_attributes');
         console.error = errorOrig;
     }
 });
 
-// --- arquivo de perfil (C.6.14.6) -----------------------------------------------------
-// fora de USER_THUMBS, inexistente ou que nao e arquivo: 305 (Tabela C.75)
+// --- profile file (C.6.14.6) ------------------------------------------------
+// Outside USER_THUMBS, nonexistent or not a file: 305 (Table C.75).
 test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o conteudo; dentro, 200', async () => {
     const fsm = await import('fs');
     const osm = await import('os');
@@ -233,11 +238,12 @@ test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o 
             expectError(r, 305);
             assert.ok(!r.text.includes('SEGREDO'), `${avatar}: ${r.text}`);
         }
-        seedProfiles('svc-a');   // avatar a.png
+        // avatar a.png
+        seedProfiles('svc-a');
         const ok = await call('GET', '/current-service/users/files?path=a.png');
         assert.equal(ok.status, 200, ok.text);
         assert.equal(ok.text, 'PNG');
-        // sem consentimento: 405 (caso abaixo)
+        // Not visible: 405 (case below).
         store.set(`user:${U1}:consent`, new Set(['outro']));
         expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
     } finally {
@@ -246,7 +252,7 @@ test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o 
     }
 });
 
-// --- C.6.14.6 sem consentimento: 405; caminho de ninguem: 305 (Tabela C.75) ------------
+// --- C.6.14.6 not visible: 405; a path of nobody: 305 (Table C.75) ----------
 test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com consentimento, 200; de ninguem, 305', async () => {
     const fsm = await import('fs');
     const osm = await import('os');
@@ -256,21 +262,22 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
     const thumbsOrig = process.env.USER_THUMBS;
     process.env.USER_THUMBS = thumbs;
     try {
-        // dono do avatar sem consentimento para o servico corrente
+        // Owner of the avatar not visible to the current service.
         seedProfiles('svc-a');
         store.set(`user:${U1}:consent`, new Set(['svc-b']));
         let r = await call('GET', '/current-service/users/files?path=a.png');
         expectError(r, 405);
         assert.ok(!r.text.includes('PNG-DO-PERFIL'), r.text);
-        // sem consentimento nenhum (conjunto vazio): 405
+        // Not visible to any service (empty set): 405.
         store.set(`user:${U1}:consent`, new Set());
         expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
-        // o consentimento vem antes do arquivo: avatar inexistente de perfil
-        // sem consentimento tambem da 405 (nao revela se o arquivo existe)
+        // Visibility comes before the file: a nonexistent avatar of a profile
+        // not visible also gives 405 (it does not reveal whether the file
+        // exists).
         store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'nao-existe.png' });
         expectError(await call('GET', '/current-service/users/files?path=nao-existe.png'), 405);
 
-        // dois perfis com o mesmo avatar: basta um com consentimento
+        // Two profiles with the same avatar: one visible is enough.
         seedProfiles('svc-a');
         store.set('users:index', new Set([U9, U1]));
         store.set(`user:${U9}`, { id: U9, nickname: 'Nove', avatar: 'a.png' });
@@ -278,14 +285,14 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
         r = await call('GET', '/current-service/users/files?path=a.png');
         assert.equal(r.status, 200, r.text);
         assert.equal(r.text, 'PNG-DO-PERFIL');
-        // os dois sem consentimento: 405
+        // Both not visible: 405.
         store.set(`user:${U1}:consent`, new Set(['svc-b']));
         expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
 
-        // arquivo que existe mas nao e avatar de ninguem: 305
+        // A file that exists but is nobody's avatar: 305.
         seedProfiles('svc-a');
         expectError(await call('GET', '/current-service/users/files?path=solto.png'), 305);
-        // avatar de perfil com consentimento, arquivo inexistente: 305
+        // Avatar of a visible profile, nonexistent file: 305.
         store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'nao-existe.png' });
         expectError(await call('GET', '/current-service/users/files?path=nao-existe.png'), 305);
     } finally {
@@ -296,9 +303,9 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
     }
 });
 
-// --- avatar = nome de arquivo das miniaturas ------------------------------------------
-// Tabela 7: "avatar" e "file path"; a plataforma grava <id>.svg em USER_THUMBS. Tabela C.75: Content-Type
-// pela extensao do arquivo.
+// --- avatar = file name of the thumbnails -----------------------------------
+// Table 7: "avatar" is a "file path"; the platform writes <id>.svg to
+// USER_THUMBS. Table C.75: Content-Type by the file extension.
 const AVATAR_CARGA = 'c3167a18-5dc5-4a6e-9b1d-3f2a7c5e8d10.svg';
 
 test('C.6.14.6: Content-Type pela extensao (svg, png, jpg, jpeg, webp); outra extensao, application/octet-stream', async () => {
@@ -347,8 +354,9 @@ test('C.6.14.2: o avatar sai como esta no perfil (o nome do arquivo), no JSON e 
     assert.equal(r.text, AVATAR_CARGA);
 });
 
-// --- aviso ao usuario na C.6.14.5 (Tabela C.74, "Restrictions") -----------------------
-// Gravacao com mudanca publica, nao retido, em aop/display/layers/popup/info; sem mudanca ou com falha, nada.
+// --- notice to the user on C.6.14.5 (Table C.74, "Restrictions") ------------
+// A write with a change publishes, not retained, on
+// aop/display/layers/popup/info; without a change or on failure, nothing.
 const INFO = 'aop/display/layers/popup/info';
 const infos = () => published.filter(([t]) => t === INFO);
 
@@ -376,7 +384,7 @@ test('C.6.14.5: o nome do servico corrente (session:current-service) quando a gr
             'A emissora Canal Teste atualizou os dados do perfil Um.',
             'A emissora svc-b atualizou os dados do perfil Um.',
         ]);
-        // nome vazio (o testbed nao publica aop/services): o id
+        // Empty name (the testbed does not publish aop/services): the id.
         store.set('session:current-service', { serviceContextId: 'x', serviceName: '', serviceId: '', transportStreamId: 't', originalNetworkId: 'o' });
         published.length = 0;
         assert.equal((await call('POST', `/svc-a/users/${U1}`, { a: '4' })).status, 200);
@@ -406,7 +414,8 @@ test('C.6.14.5: nada mudou (mesmo valor, remocao do que nao existe) -> sem aviso
     r = await call('POST', `/svc-a/users/${U1}`, { cor: 'azul', tam: 'G', outro: '' });
     assert.equal(r.status, 200, r.text);
     assert.deepEqual(infos(), [], 'sem mudanca, sem aviso');
-    // um valor diferente no meio de iguais avisa; remocao do que existe avisa
+    // One different value among equal ones notifies; removing an existing one
+    // notifies.
     assert.equal((await call('POST', `/svc-a/users/${U1}`, { cor: 'azul', tam: 'M' })).status, 200);
     assert.equal((await call('POST', `/svc-a/users/${U1}`, { tam: '' })).status, 200);
     assert.equal(infos().length, 2);
@@ -418,9 +427,9 @@ test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101,
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
-        fake.recusar('tv30_atributos_emissora', 'TV30ESQUEMA tv30_atributos_emissora: teste');
+        fake.recusar('tv30_broadcaster_attributes', 'TV30SCHEMA tv30_broadcaster_attributes: test');
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'verde' }), 200);
-        fake.recusar('tv30_atributos_emissora');
+        fake.recusar('tv30_broadcaster_attributes');
         fake.setDown(true);
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'verde' }), 200);
         fake.setDown(false);
@@ -432,7 +441,7 @@ test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101,
         store.set('session:current-service-id', '');
         expectError(await call('POST', `/current-service/users/${U1}`, { cor: 'verde' }), 300);
     } finally {
-        fake.recusar('tv30_atributos_emissora');
+        fake.recusar('tv30_broadcaster_attributes');
         fake.setDown(false);
         console.error = errorOrig;
     }

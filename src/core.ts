@@ -4,7 +4,7 @@ import logger from './logger';
 import mqttClient, { TOPICS, client } from "./mqtt-client";
 import { AppNode } from "./modules/remotedevice-manager/remote-device";
 import { associateAppNodes, disassociateAppNodes } from "./modules/remotedevice-manager/manager";
-import * as funcoes from './redis-funcoes';
+import * as redisFunctions from './redis-functions';
 import { integerServiceId } from './util/service-id';
 dotenv.config();
 
@@ -47,7 +47,8 @@ const data: CoreData = {
   current: {
     serviceName: "",
     serviceId: -1,
-    // globalServiceId do servico corrente (Tabela 6, C.3.5), preenchido em currentService
+    // globalServiceId of the current service (Table 6, C.3.5), set in
+    // currentService.
     serviceContextId: "",
     transportStreamId: "c08b2c72-fd14-4095-adaf-2e5810850c57",
     originalNetworkId: "09e59a1d-e2e7-467e-85db-2fb5a572e2fc",
@@ -70,9 +71,10 @@ function getLocalIP(): string {
     return '127.0.0.1';
 }
 
-// aop/<sid>/currentApp traz o appId corrente, retido; mensagem vazia e o fim da aplicacao
-// (infra/mqtt-broker/plugin/config/schemas.json). Trocar ou encerrar zera app.url, o diretorio
-// de onde a C.6.4.7 le, para nao servir o da aplicacao anterior; sem diretorio, 305.
+// aop/<sid>/currentApp carries the current appId, retained; an empty message
+// is the end of the application. Changing or ending it clears app.url, the
+// directory C.6.4.7 reads from, so that the one of the previous application
+// is not served; without a directory, 305.
 function setAppId(appid: string): void {
   if (data.app.id == appid) return;
 
@@ -157,17 +159,19 @@ function currentService(sid: string): void {
   data.app.id = "";
   data.app.url = "";
   data.app.nodes = [];
-  // sem SLT nao ha serviceId nem serviceName: aop/services so traz o serviceContextId
+  // Without an SLT there is no serviceId or serviceName: aop/services carries
+  // only the serviceContextId.
   data.current.serviceId = -1;
   data.current.serviceName = '';
   data.current.serviceContextId = sid;
-  // sem servico corrente o hash da sessao fica como estava: o esquema exige serviceContextId
+  // Without a current service the session hash stays as it was: the schema
+  // requires serviceContextId.
   if (!sid) return;
 
-  // tv30_sessao_servico regrava o hash inteiro e confere o esquema (infra/redis/esquema.json).
-  // serviceId: inteiro em decimal ou vazio (Tabela C.8).
+  // tv30_session_service rewrites the whole hash and checks the schema.
+  // serviceId: a decimal integer or empty (Table C.8).
   const serviceId = integerServiceId(data.current.serviceId);
-  funcoes.sessaoServico({
+  redisFunctions.sessionService({
     serviceContextId: data.current.serviceContextId,
     serviceId: serviceId === undefined ? '' : String(serviceId),
     serviceName: data.current.serviceName ?? '',
@@ -178,8 +182,8 @@ function currentService(sid: string): void {
 
 mqttClient.addTopicHandler(TOPICS.current_service, currentService);
 
-// Os servicos anunciados na LLS, retido, publicado pelo AoP (aop-transport-layer-metadata-lls);
-// mensagem vazia apaga o retido: nenhum servico
+// The services announced in the LLS, retained; an empty message deletes the
+// retained one: no service.
 function loadServiceData(m: string): void {
   let list: unknown = [];
   try {
@@ -275,7 +279,7 @@ export function showYesNoPopUpAsync(message: string, timeout: number = 1000): Pr
         const callback: subscribeFunction = (m: string, _) => {
             logger.debug(`Received response ${m} for Yes/No popup`);
             clearTimeout(timeoutId);
-            // so "true" autoriza: a AoP publica "false" no "Nao" e no timeout, e Boolean("false") === true
+            // Only "true" authorizes (Boolean("false") is true).
             wrapup(m.trim() === "true");
         };
         subscribe(responseTopic, callback);
@@ -296,8 +300,9 @@ export function showPINPopUp(pin: string, timeout: number) {
     client.publish(_t.pin_popup, msg);
 }
 
-// Fim do pareamento (C.4.3.2, C.4.3.3): {"close":true} no topico do pop-up; a camada grafica ignora
-// se o pop-up na tela for de outro tipo. Mesmo cliente, topico e QoS da abertura: o MQTT preserva a ordem.
+// End of the pairing (C.4.3.2, C.4.3.3): {"close":true} on the topic of the
+// pop-up. Same client, topic and QoS as the opening, so MQTT keeps the
+// order.
 const closePopUpMessage = JSON.stringify({ close: true });
 
 export function closeQRCodePopUp() {
