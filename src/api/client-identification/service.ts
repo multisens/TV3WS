@@ -6,20 +6,24 @@ import { base64UrlEncode, base64UrlDecode, sha256Encrypt, aes128ECBEncrypt, crea
 
 export const pairingMethods: string[] = ['qrcode', 'kex'];
 
-// O pop-up do QR code e o do PIN ficam na tela ate o /tv3/token que confere o desafio (C.4.3.2, C.4.3.3).
-// Este prazo e so uma trava para o pop-up nao ficar preso se o cliente sumir; a norma nao fixa prazo.
-// Desafio errado da 102 e a tentativa segue aberta, sem limite de tentativas nem prazo do desafio.
+// Lock of the QR code and PIN pop-ups: they stay on screen until the
+// /tv3/token that checks the challenge (C.4.3.2, C.4.3.3) or until this time
+// expires.
 export const PAIRING_POPUP_TIMEOUT_MS = 120 * 1000;
 
 type PairingPopUp = 'qrcode' | 'pin';
 
-// Camada grafica: um pop-up de autorizacao de cada vez. Com um sim/nao esperando resposta, ou o QR code ou
-// o PIN de um pareamento na tela, um /tv3/authorize novo recebe 103 na hora (C.4.2.3; Tabela C.3).
-// A reserva e do pedido, nao do clientid: o 103 de um segundo pedido com o mesmo clientid nao libera a do
-// primeiro. No nao local que aceitou, ela passa ao pop-up do pareamento sem janela. Sai no fim do
-// /tv3/authorize, no sucesso do pareamento ou no fim da trava; so em memoria, como o material do pareamento.
+// Graphics layer: one authorization pop-up at a time. With a yes/no waiting
+// for an answer, or the QR code or PIN of a pairing on screen, a new
+// /tv3/authorize gets 103 at once (C.4.2.3; Table C.3). The reservation
+// belongs to the request, not to the clientid: the 103 of a second request
+// with the same clientid does not release the first one's. For a non-local
+// client that accepted, it passes to the pairing pop-up without a gap. It
+// is released at the end of /tv3/authorize, on the success of the pairing or
+// at the end of the lock; memory only.
 export const YESNO_TIMEOUT_MS = 10 * 1000;
-// gravacao do Redis entre a resposta ao sim/nao e o fim do pedido (cada comando desiste em 1,5 s)
+// Redis writing between the answer to the yes/no and the end of the request
+// (each command gives up after 1.5 s).
 const YESNO_FOLGA_MS = 5 * 1000;
 
 export type Reserva = { tipo: 'yesno' | PairingPopUp; dono: string; ate: number };
@@ -31,8 +35,7 @@ function camadaOcupada(): Reserva | undefined {
     return ocupacao;
 }
 
-// Reserva a camada para o sim/nao do pedido; undefined se ela estiver ocupada
-// (o controller responde 103).
+// Reserves the layer for the yes/no of the request; undefined if it is busy.
 function reservarCamada(clientId: string): Reserva | undefined {
     const atual = camadaOcupada();
     if (atual) {
@@ -43,15 +46,16 @@ function reservarCamada(clientId: string): Reserva | undefined {
     return ocupacao;
 }
 
-// Fim do pedido (local atendido, recusa, erro): libera a reserva dele se ela
-// ainda for a do sim/nao. Se ela ja passou ao pop-up do pareamento, ou se a
-// camada e de outro pedido, nada muda.
+// End of the request (local client served, refusal, error): releases its
+// reservation if it is still the one of the yes/no. If it already passed to
+// the pairing pop-up, or the layer belongs to another request, nothing
+// changes.
 function liberarReserva(r: Reserva | undefined): void {
     if (r !== undefined && ocupacao === r) ocupacao = undefined;
 }
 
-// O pop-up do pareamento toma a camada (a reserva do sim/nao deste pedido sai
-// sem janela) ate o sucesso ou o fim da trava.
+// The pairing pop-up takes the layer (the yes/no reservation of this
+// request leaves without a gap) until success or the end of the lock.
 function ocuparComPareamento(tipo: PairingPopUp, clientId: string): void {
     ocupacao = { tipo, dono: clientId, ate: agora() + PAIRING_POPUP_TIMEOUT_MS };
 }
@@ -81,7 +85,8 @@ function generateQRCodeSecret(client: Client): Buffer<ArrayBufferLike> {
     return secret;
 }
 
-// C.4.3.3, passo 2 e nota: o PIN e o resto do hash por 10 000, "a four-digit number", com zeros a esquerda
+// C.4.3.3, step 2 and note: the PIN is the remainder of the hash by 10 000,
+// "a four-digit number", with leading zeros.
 export function pinFromHash(hash: Buffer): string {
     const pin = BigInt('0x' + hash.toString('hex')) % BigInt(10000);
     return pin.toString().padStart(4, '0');
@@ -105,7 +110,7 @@ function generatePINSecret(client: Client, key: string): Buffer<ArrayBufferLike>
 
 function generateChallenge(client: Client, secret: Buffer<ArrayBufferLike>) {
     const randomString = crypto.randomBytes(16);
-    // guarda o SHA-256 em bytes: .toString() UTF-8 perderia informacao
+    // Keeps the SHA-256 as bytes: a UTF-8 .toString() would lose information.
     client.setChallenge(sha256Encrypt(randomString));
 
     const encrypted = aes128ECBEncrypt(randomString, secret);
@@ -113,8 +118,8 @@ function generateChallenge(client: Client, secret: Buffer<ArrayBufferLike>) {
     return base64UrlEncode(encrypted);
 }
 
-// Fecha o pop-up de pareamento do cliente, se ainda for o dele, e libera a camada. Falha so vai para o
-// log: a resposta do /tv3/token ja saiu, e a trava fecha o pop-up.
+// Closes the pairing pop-up of the client, if it is still its own, and
+// releases the layer. A failure is only logged.
 function endPairing(clientId: string): void {
     try {
         const o = camadaOcupada();

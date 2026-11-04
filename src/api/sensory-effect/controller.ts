@@ -29,7 +29,7 @@ function GETRenderer(req: Request, res: Response): void {
     return;
   }
 
-  // C.6.16.2 (Tabela C.82): o objeto do renderer vai na raiz da resposta
+  // C.6.16.2 (Table C.82): the renderer object is the root of the response.
   res.status(200).json(renderer);
 }
 
@@ -55,7 +55,8 @@ function POSTControlRenderer(req: Request, res: Response): void {
 
   try {
     service.controlRenderer(rendererId, body);
-    // C.6.16.3 (Tabela C.83): responde o objeto da Tabela C.82 com o estado apos a operacao
+    // C.6.16.3 (Table C.83): answers the object of Table C.82 with the state
+    // after the operation.
     res.status(200).json(service.getRendererMetadata(rendererId));
   } catch (error) {
     returnError(res, 101, error instanceof Error ? error.message : String(error));

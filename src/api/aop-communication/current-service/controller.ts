@@ -11,9 +11,10 @@ type CurrentServiceResponse = {
 	serviceId?: number;
 };
 
-// C.6.3.1 (Tabela C.8). Servico em uso = ultimo valor de aop/currentService; vazio ou nunca recebido -> 300,
-// o mesmo criterio da borda na C.6.8. O 302 nao e emitido: o testbed nao modela recepcao de sinal.
-// serviceId sem valor inteiro conhecido e omitido (C.3.2.2): sem SLT, aop/services nao o traz.
+// C.6.3.1 (Table C.8). The service in use is the last value of
+// aop/currentService; empty or never received gives 300. A serviceId without
+// a known integer value is omitted (C.3.2.2).
+// TODO: error 302 is not emitted (C.6.3.1).
 function GETCurrentService(req: Request, res: Response): void {
 	if (!core.app.sid) {
 		returnError(res, 300);

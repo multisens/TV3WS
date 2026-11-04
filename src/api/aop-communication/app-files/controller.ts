@@ -4,9 +4,10 @@ import service, { FileData } from './service';
 import { returnError } from '../../../util';
 
 
-// C.6.4.7, Tabela C.17. Caminho recusado ou inexistente da 305. path e opcional: omitido ou vazio, e a
-// listagem da base; diretorio tambem responde a listagem. O <appId> so e comparado com o da aplicacao
-// corrente e nao entra em caminho nenhum.
+// C.6.4.7, Table C.17. A refused or nonexistent path gives 305. path is
+// optional: omitted or empty, the listing of the base; a directory also
+// answers the listing. The <appId> is only compared with the one of the
+// current application and goes into no path.
 function GETAppFile(req:Request, res:Response) {
 	if (!service.validateAppId(req.params.appid)) {
 		returnError(res, 305, `appid ${req.params.appid}`);

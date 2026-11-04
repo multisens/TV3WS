@@ -1,0 +1,144 @@
+import http, { IncomingMessage } from 'http';
+import https from 'https';
+import { Server, Socket } from 'net';
+import { WebSocket, WebSocketServer } from 'ws';
+import core from '../../../core';
+import logger from '../../../logger';
+import { tlsMaterial, wsTls } from '../../../tls';
+import { ApiError, positiveIntFromEnv } from '../../../util';
+import { closeServer, listenOnFreePort } from '../../util/port';
+import { LocalEntryPoint, registries } from './manager';
+import Registry from './registry';
+
+type EntryKind = 'device' | 'local';
+
+const PING_INTERVAL_MS = positiveIntFromEnv('PING_INTERVAL_MS');
+const ENTRY_PATH = 'rd';
+const ENTRY_PREFIX = `/${ENTRY_PATH}/`;
+
+const wss = new WebSocketServer({ noServer: true });
+const alive = new WeakSet<WebSocket>();
+
+// Entry servers of the devices (C.6.15.2) and of the local clients
+// (C.6.15.5); the ports are undefined while the servers are not listening
+let devicePort: number | undefined;
+let deviceServer: Server | undefined;
+let localPort: number | undefined;
+let localServer: Server | undefined;
+let pingTimer: NodeJS.Timeout | undefined;
+
+// Opens the entry server of the devices, with TLS when wsTls() is on and
+// there is TLS material, and the entry server of the local clients, without
+// TLS (C.6.15.5, Table C.80: ws://), each on a free port
+export async function startEntryServer(): Promise<void> {
+    const tls = wsTls() ? tlsMaterial() : undefined;
+    deviceServer = tls
+        ? https.createServer({ key: tls.key, cert: tls.cert })
+        : http.createServer();
+    deviceServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+        onUpgrade('device', req, socket, head);
+    });
+    devicePort = await listenOnFreePort(deviceServer);
+
+    localServer = http.createServer();
+    localServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+        onUpgrade('local', req, socket, head);
+    });
+    localPort = await listenOnFreePort(localServer);
+
+    logger.info(`[v100.0 remote-device] entry servers listening on ports ${devicePort} (devices) and ${localPort} (local clients)`);
+
+    pingTimer = setInterval(() => {
+        for (const ws of wss.clients) {
+            if (alive.has(ws)) {
+                alive.delete(ws);
+                ws.ping();
+            } else {
+                ws.terminate();
+            }
+        }
+    }, PING_INTERVAL_MS);
+}
+
+// Stops the ping timer, closes every connection and both servers
+export async function stopEntryServer(): Promise<void> {
+    clearInterval(pingTimer);
+    pingTimer = undefined;
+    for (const ws of wss.clients) {
+        ws.terminate();
+    }
+    await closeServer(deviceServer);
+    await closeServer(localServer);
+    deviceServer = undefined;
+    devicePort = undefined;
+    localServer = undefined;
+    localPort = undefined;
+}
+
+export function isEntryServerListening(): boolean {
+    return devicePort !== undefined && localPort !== undefined;
+}
+
+// C.6.15.2: URL of the entry point of the device identified by the token
+export function entryPointUrl(token: string): string {
+    if (devicePort === undefined) {
+        throw new ApiError(200, 'entry server is not listening');
+    }
+    return `${wsTls() ? 'wss' : 'ws'}://${core.server.url}:${devicePort}${ENTRY_PREFIX}${token}`;
+}
+
+// C.6.15.5: URL of the local entry point identified by the token
+export function localEntryPointUrl(token: string): string {
+    if (localPort === undefined) {
+        throw new ApiError(200, 'entry server is not listening');
+    }
+    return `ws://${core.server.url}:${localPort}${ENTRY_PREFIX}${token}`;
+}
+
+// Accepts the upgrade to an entry point of the kind served by the server;
+// any other path or token is refused
+function onUpgrade(kind: EntryKind, req: IncomingMessage, socket: Socket, head: Buffer): void {
+    const path = new URL(req.url ?? '', 'http://localhost').pathname;
+    if (!path.startsWith(ENTRY_PREFIX)) {
+        refuse(socket);
+        return;
+    }
+
+    const token = path.slice(ENTRY_PREFIX.length);
+    const entryPoint = registries.getEntryPoint(token);
+    if (!entryPoint || entryPoint.kind !== kind) {
+        refuse(socket);
+        return;
+    }
+
+    wss.handleUpgrade(req, socket, head, (ws) => {
+        alive.add(ws);
+        ws.on('pong', () => alive.add(ws));
+        if (entryPoint.kind === 'device') {
+            onDeviceConnection(entryPoint.registry, ws);
+        } else {
+            onClientConnection(entryPoint, ws);
+        }
+    });
+}
+
+// Responds HTTP 404 and closes the socket, without opening the connection
+function refuse(socket: Socket): void {
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+}
+
+function onDeviceConnection(registry: Registry, ws: WebSocket): void {
+    registries.connect(registry, ws);
+    ws.on('close', () => registries.disconnect(registry, ws));
+    ws.on('error', () => logger.error(`[v100.0 remote-device] error on the socket of device ${registry.handle}`));
+    ws.on('message', (data, isBinary) => registries.forwardFromDevice(registry, ws, data, isBinary));
+}
+
+function onClientConnection(entryPoint: LocalEntryPoint, ws: WebSocket): void {
+    const registry = entryPoint.registry;
+    registries.connectClient(entryPoint, ws);
+    ws.on('close', () => registries.disconnectClient(registry, ws));
+    ws.on('error', () => logger.error(`[v100.0 remote-device] error on the socket of client ${entryPoint.clientId}`));
+    ws.on('message', (data, isBinary) => registries.forwardFromClient(registry, ws, data, isBinary));
+}

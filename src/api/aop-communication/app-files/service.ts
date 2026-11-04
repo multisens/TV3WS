@@ -42,8 +42,8 @@ function validateAppId(appid: string): boolean {
 }
 
 
-// undefined = caminho recusado ou inexistente (305). Sem diretorio conhecido (core.app.url vazio, p.ex.
-// logo apos a troca de servico) tambem 305, e nao 200: os arquivos vem do sinal, e a Tabela C.17 so lista o 305.
+// undefined = a refused or nonexistent path (305). Without a known directory
+// (core.app.url empty, e.g. right after a service change), also undefined.
 function resolvePath(fpath: unknown): ResolvedPath | undefined {
 	return resolveInsideDir(core.app.url, fpath);
 }
@@ -63,9 +63,10 @@ function getFile(entry: ResolvedPath): FileData {
 }
 
 
-// Listagem de primeiro nivel da Tabela C.17: {"files": [{"name", "size"}], "dirs": [{"name"}]}. Fora do
-// que a tabela trata: link simbolico vale pelo destino, so dentro da base; socket, fifo e nome com barra
-// invertida ficam de fora; ordem por nome.
+// First-level listing of Table C.17: {"files": [{"name", "size"}],
+// "dirs": [{"name"}]}. Beyond what the table covers: a symbolic link counts
+// by its target, only inside the base; sockets, fifos and names with a
+// backslash are left out; ordered by name.
 export type DirListing = {
 	files: { name: string, size: number }[],
 	dirs: { name: string }[]

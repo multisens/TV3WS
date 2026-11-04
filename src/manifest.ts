@@ -5,12 +5,13 @@ import {
   AdvertisedEndpoint, advertiseWarnings, normalizeHost, resolveAdvertisedEndpoint,
 } from './ssdp-config';
 
-// GET /manifest (C.3.4), destino do LOCATION do anuncio SSDP (feito pelo anunciante nativo do host).
-// O host tem de ser o do anuncio: SSDP_ADVERTISE_HOST, se definido; senao o Host original, que a borda
-// repassa em X-TV30-Host; senao o Host da requisicao; senao SERVER_URL ou o IP local.
+// GET /manifest (C.3.4), the target of the LOCATION of the SSDP
+// announcement. The host is SSDP_ADVERTISE_HOST, if set; otherwise the
+// original Host in X-TV30-Host; otherwise the Host of the request; otherwise
+// SERVER_URL or the local IP.
 export const INTERNAL_HOST_HEADER = 'X-TV30-Host';
 
-// Portas da borda e host de sobreposicao, resolvidos uma vez no boot.
+// Edge ports and override host, resolved once at startup.
 export function loadAdvertisedEndpoint(env: NodeJS.ProcessEnv = process.env): AdvertisedEndpoint {
   let endpoint: AdvertisedEndpoint;
   try {
@@ -20,7 +21,8 @@ export function loadAdvertisedEndpoint(env: NodeJS.ProcessEnv = process.env): Ad
     logger.error(`[ssdp] FALHA em configuracao do /manifest (EDGE_HTTP_PORT/EDGE_HTTPS_PORT): ${msg} — encerrando o processo`);
     process.exit(1);
   }
-  // logger.error: o nivel padrao (LOG_LEVEL=ERROR) esconderia info/debug.
+  // logger.error: the default level (LOG_LEVEL=ERROR) would hide info and
+  // debug.
   for (const warning of advertiseWarnings(endpoint)) {
     logger.error(`[ssdp] AVISO ${warning}`);
   }
@@ -32,8 +34,9 @@ export function manifestHost(endpoint: AdvertisedEndpoint, req: Pick<Request, 'g
   return normalizeHost(req.get(INTERNAL_HOST_HEADER)) || normalizeHost(req.get('host')) || endpoint.host;
 }
 
-// O navegador so deixa JavaScript de outra origem ler o que estiver em Access-Control-Expose-Headers.
-// Access-Control-Allow-Origin fica na borda: duplicado, o Chrome recusa.
+// The browser lets JavaScript of another origin read only what is in
+// Access-Control-Expose-Headers. No Access-Control-Allow-Origin here: a
+// duplicated one is refused by the browser.
 export const MANIFEST_HEADERS = [
   'Server-BaseURL',
   'Server-SecureBaseURL',

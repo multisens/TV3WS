@@ -1,18 +1,23 @@
 import fs from 'fs';
 import path from 'path';
 
-// Caminho do cliente resolvido dentro de um diretorio-base (C.6.4.7, Tabela C.17; C.6.14.6, Tabela C.75).
-// A barra inicial e opcional e o caminho e sempre a partir da base (Tabela C.17). ".." que sai da base,
-// barra invertida (separador no Windows) e NUL sao recusados; a query ja chega decodificada, e nada se
-// decodifica de novo. Link simbolico vale pelo destino real, que tambem tem de estar na base; base vazia
-// e recusa. Recusa e inexistencia devolvem undefined; outra falha do sistema de arquivos sobe.
+// A path of the client resolved inside a base directory (C.6.4.7, Table
+// C.17; C.6.14.6, Table C.75). The leading slash is optional and the path
+// always starts at the base (Table C.17). A ".." that leaves the base, a
+// backslash (separator on Windows) and NUL are refused; the query arrives
+// already decoded, and nothing is decoded again. A symbolic link counts by
+// its real target, which must also be in the base; an empty base is a
+// refusal. Refusal and nonexistence give undefined; any other file system
+// failure is thrown.
 export type ResolvedPath = {
-    base: string;   // realpath da base
-    path: string;   // realpath do caminho pedido, dentro da base
+    // realpath of the base
+    base: string;
+    // realpath of the requested path, inside the base
+    path: string;
     stat: fs.Stats;
 };
 
-// target dentro de base (ou a propria base), os dois ja resolvidos
+// Whether target is inside base (or is base), both already resolved.
 export function isInsideDir(base: string, target: string): boolean {
     const rel = path.relative(base, target);
     return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
@@ -22,7 +27,7 @@ const NOT_FOUND = new Set(['ENOENT', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG']);
 
 export function resolveInsideDir(baseDir: string | undefined, requested: unknown): ResolvedPath | undefined {
     if (typeof baseDir !== 'string' || baseDir === '') return undefined;
-    // parametro repetido (?path=a&path=b) chega como lista: nao e um caminho
+    // A repeated parameter (?path=a&path=b) arrives as a list: not a path.
     if (typeof requested !== 'string') return undefined;
     if (requested.includes('\0') || requested.includes('\\')) return undefined;
     try {

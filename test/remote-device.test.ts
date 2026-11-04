@@ -1,7 +1,8 @@
-// Registro e remocao de remote-device (C.6.15.2, C.6.15.3) com Redis, core e MQTT por dubles. Com o Redis
-// fora, 404 {error:200} sem porta aberta nem registro pela metade; o descadastro fecha as portas; porta
-// sorteada ocupada sorteia outra. Esquema dos pontos de entrada: wss:// no do dispositivo remoto, com o
-// certificado do receptor; ws:// no local.
+// Registration and removal of a remote device (C.6.15.2, C.6.15.3) with
+// Redis, core and MQTT by doubles. With Redis down, 404 {error:200} with no
+// port open and no half registration; deregistration closes the ports; a
+// drawn port in use draws another. Scheme of the entry points: wss:// for
+// the remote device, with the receiver certificate; ws:// for the local one.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -15,7 +16,8 @@ import express from 'express';
 import { WebSocket } from 'ws';
 import { createFakeRedis } from './helpers/fake-redis';
 
-// registro em ws:// aqui, independente do certificado da maquina (o teste de TLS o liga)
+// Registration on ws:// here, whatever the certificate of the machine (the
+// TLS test turns it on).
 process.env.TV3WS_WS_TLS = 'false';
 
 const fake = createFakeRedis();
@@ -33,18 +35,22 @@ function stub(rel: string, exports: object): void {
 const fakeCore = { app: { sid: '', id: '', url: '', nodes: [] }, server: { url: 'localhost' } };
 stub('redis-client', { default: fake.redis });
 stub('core', { default: fakeCore });
+const topicHandlers = new Map<string, ((m: string) => void)[]>();
+// Delivers a message to the handlers of the topic, as the arrival from the
+// broker.
+const deliver = (topic: string, message: string) => (topicHandlers.get(topic) ?? []).forEach(h => h(message));
 stub('mqtt-client', {
     default: {
         publish(t: string, m: string) { published.push([t, m]); },
-        addTopicHandler() { /* nada */ },
-        removeTopicHandler() { /* nada */ },
+        addTopicHandler(t: string, f: (m: string) => void) { topicHandlers.set(t, [...(topicHandlers.get(t) ?? []), f]); },
+        removeTopicHandler() { /* nothing */ },
         parseTopic(t: string) { return t; },
     },
     TOPICS: { devices: 'aop/devices', app_doc: 'aop/:serviceId/:appId/doc' },
 });
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { default: remoteDeviceAPI, routerV100: remoteDeviceV100API } = require('../src/api/remote-device');
+const { default: remoteDeviceAPI } = require('../src/api/remote-device');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const basic = require('../src/middleware/basic').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -56,8 +62,8 @@ const { apiNotFound, errorHandler } = require('../src/util') as typeof import('.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const tls = require('../src/tls') as typeof import('../src/tls');
 
-// porta livre, escutando como o ponto de entrada (sem host: todas as
-// interfaces), para o EADDRINUSE acontecer igual no Windows e no Linux
+// A free port, listening as the entry point (no host: every interface), so
+// that EADDRINUSE happens the same way on Windows and Linux.
 async function occupy(port = 0): Promise<net.Server> {
     const s = net.createServer();
     await new Promise<void>((resolve, reject) => { s.once('error', reject); s.listen(port, () => resolve()); });
@@ -71,11 +77,12 @@ async function freePort(): Promise<number> {
     await release(s);
     return p;
 }
-// duas portas livres e consecutivas (P, P+1), para o teste do sorteio
+// Two free consecutive ports (P, P+1), for the draw test.
 async function freePortPair(): Promise<number> {
     for (let i = 0; i < 20; i++) {
         const p = await freePort();
-        try { await release(await occupy(p + 1)); return p; } catch { /* P+1 ocupada: outra */ }
+        // P+1 in use: try another.
+        try { await release(await occupy(p + 1)); return p; } catch { }
     }
     throw new Error('sem par de portas livres');
 }
@@ -86,7 +93,7 @@ function listening(port: number): Promise<boolean> {
         c.once('error', () => resolve(false));
     });
 }
-// faixa do sorteio (WS_PORT_MIN..WS_PORT_MAX, lida a cada abertura)
+// Range of the draw (WS_PORT_MIN..WS_PORT_MAX, read on every opening).
 function portRange(min: number, max = min): void {
     process.env.WS_PORT_MIN = String(min);
     process.env.WS_PORT_MAX = String(max);
@@ -99,15 +106,12 @@ let wsPort = 0;
 before(async () => {
     wsPort = await freePort();
     portRange(wsPort);
-    // a montagem do app.ts: a 100.0 chega da borda com o prefixo /v100.0
+    // The mounting of app.ts.
     const app = express();
     app.use(express.json());
     app.use('/tv3', basic);
-    app.use('/v100.0/tv3', basic);
     app.use('/tv3/remote-device', remoteDeviceAPI);
-    app.use('/v100.0/tv3/remote-device', remoteDeviceV100API);
     app.use('/tv3', apiNotFound);
-    app.use('/v100.0/tv3', apiNotFound);
     app.use(errorHandler);
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     root = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -115,9 +119,11 @@ before(async () => {
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
 
 const BASE = '/tv3/remote-device';
-const BASE_V100 = '/v100.0/tv3/remote-device';
-async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = {}, base = BASE) {
-    const res = await fetch(`${root}${base}${route}`, {
+// Class and identity of the client, as the edge writes them for the device
+// that registers itself.
+const DEVICE_CLIENT = { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-1' };
+async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = DEVICE_CLIENT) {
+    const res = await fetch(`${root}${BASE}${route}`, {
         method,
         headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -130,9 +136,8 @@ const expectError = (r: { status: number; json: any }, code: number) => {
     assert.equal(r.json?.error, code, JSON.stringify(r.json));
 };
 const BODY = { deviceClass: 'teste', supportedTypes: ['light'] };
-// como a borda repassa a 100.0: caminho /v100.0 e a versao negociada no cabecalho
+// The negotiated version, as the edge passes it on.
 const V100 = { 'X-TV30-API-Version': '100.0' };
-const call100 = (method: string, route: string) => call(method, route, undefined, V100, BASE_V100);
 
 test('Redis fora do ar no registro: 404 {error:200}, sem porta aberta, sem registro nem publicacao', async () => {
     portRange(wsPort);
@@ -166,21 +171,22 @@ test('registro com Redis normal; remocao que falha mantem o dispositivo; depois 
     assert.equal(await listening(wsPort), true, 'remocao que falhou nao fecha a porta');
 
     const d = await call('DELETE', `/${handle}`);
-    assert.equal(d.status, 204);
+    assert.equal(d.status, 200);
     assert.equal(manager.getDeviceByHandle(handle), undefined);
     assert.equal(store.has(`remote-device:${handle}`), false);
     assert.deepEqual(published[published.length - 1], ['aop/devices/teste', '']);
     assert.equal(await listening(wsPort), false, 'a porta do dispositivo removido nao fica escutando');
-    expectError(await call('DELETE', `/${handle}`), 101);
+    expectError(await call('DELETE', `/${handle}`), 305);
 });
 
 test('EADDRINUSE na porta sorteada: sorteia outra, sem derrubar o processo', async (t) => {
     const p = await freePortPair();
     const busy = await occupy(p);
     try {
-        portRange(p, p + 2);   // sorteio em [P, P+2): P ou P+1
+        // Draw in [P, P+1]: P or P+1.
+        portRange(p, p + 1);
         let calls = 0;
-        // 1o sorteio cai na porta ocupada (P), os seguintes em P+1
+        // The first draw falls on the port in use (P), the next ones on P+1.
         t.mock.method(Math, 'random', () => (calls++ === 0 ? 0 : 0.99));
         const r = await call('POST', '/', BODY);
         t.mock.restoreAll();
@@ -190,7 +196,7 @@ test('EADDRINUSE na porta sorteada: sorteia outra, sem derrubar o processo', asy
         assert.equal((store.get(`remote-device:${r.json.handle}`) as Record<string, string>).url, `ws://localhost:${p + 1}`);
         assert.equal(await listening(p + 1), true);
 
-        assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 204);
+        assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
         assert.equal(await listening(p + 1), false);
     } finally {
         await release(busy);
@@ -210,11 +216,11 @@ test(`todas as ${LISTEN_ATTEMPTS} tentativas em porta ocupada: 404 {error:200}, 
     } finally {
         await release(busy);
     }
-    // o processo seguiu de pe: o proximo registro numa porta livre funciona
+    // The process stayed up: the next registration on a free port works.
     portRange(wsPort);
     const r = await call('POST', '/', BODY);
     assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
     assert.equal(await listening(wsPort), false);
 });
 
@@ -232,46 +238,16 @@ test('ponto de entrada local: a listagem 2.0 abre; o descadastro fecha as duas p
     const mine = list.json.devices.find((d: { handle: string }) => d.handle === handle);
     assert.equal(mine.url, `ws://localhost:${localPort}`);
     assert.equal(await listening(localPort), true);
-    // listagem repetida reusa o mesmo ponto de entrada
+    // A repeated listing reuses the same entry point.
     const again = await call('GET', '/devices/teste');
     assert.equal(again.json.devices.find((d: { handle: string }) => d.handle === handle).url, mine.url);
 
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
     assert.equal(await listening(devPort), false, 'porta do dispositivo');
     assert.equal(await listening(localPort), false, 'porta do ponto de entrada local');
 });
 
-test('100.0: DELETE /device/{handle} fecha a porta local e a ativacao seguinte abre outra', async () => {
-    const devPort = await freePort();
-    const localPort = await freePort();
-    portRange(devPort);
-    const r = await call('POST', '/', BODY);
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    const handle: string = r.json.handle;
-
-    portRange(localPort);
-    const ep = await call100('GET', `/device/${handle}`);
-    assert.equal(ep.status, 200, JSON.stringify(ep.json));
-    assert.equal(portOfUrl(ep.json.url), localPort);
-    assert.equal(await listening(localPort), true);
-
-    assert.equal((await call100('DELETE', `/device/${handle}`)).status, 204);
-    assert.equal(await listening(localPort), false, 'porta local fechada pelo DELETE /device/{handle}');
-    assert.equal(await listening(devPort), true, 'o dispositivo continua registrado');
-
-    const nextPort = await freePort();
-    portRange(nextPort);
-    const ep2 = await call100('GET', `/device/${handle}`);
-    assert.equal(ep2.status, 200, JSON.stringify(ep2.json));
-    assert.equal(portOfUrl(ep2.json.url), nextPort, 'nova ativacao nao devolve o endereco fechado');
-    assert.equal(await listening(nextPort), true);
-
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
-    assert.equal(await listening(devPort), false);
-    assert.equal(await listening(nextPort), false);
-});
-
-test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', async () => {
+test('listagens simultaneas abrem um ponto de entrada local so', async () => {
     const devPort = await freePort();
     portRange(devPort);
     const r = await call('POST', '/', BODY);
@@ -279,22 +255,25 @@ test('100.0: pedidos simultaneos de ativacao abrem um ponto de entrada so', asyn
     const handle: string = r.json.handle;
 
     const p = await freePortPair();
-    portRange(p, p + 2);   // sem trava, o segundo pedido abriria a outra porta
+    // Without the lock, the second request would open the other port.
+    portRange(p, p + 1);
     const [a, b] = await Promise.all([
-        call100('GET', `/device/${handle}`),
-        call100('GET', `/device/${handle}`),
+        call('GET', '/devices/teste'),
+        call('GET', '/devices/teste'),
     ]);
     assert.equal(a.status, 200, JSON.stringify(a.json));
     assert.equal(b.status, 200, JSON.stringify(b.json));
-    assert.equal(a.json.url, b.json.url);
-    const other = portOfUrl(a.json.url) === p ? p + 1 : p;
+    const urlA: string = a.json.devices.find((d: { handle: string }) => d.handle === handle).url;
+    const urlB: string = b.json.devices.find((d: { handle: string }) => d.handle === handle).url;
+    assert.equal(urlA, urlB);
+    const other = portOfUrl(urlA) === p ? p + 1 : p;
     assert.equal(await listening(other), false, 'nenhum segundo servidor escutando');
 
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
-    assert.equal(await listening(portOfUrl(a.json.url)), false);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
+    assert.equal(await listening(portOfUrl(urlA)), false);
 });
 
-test('a rota escolhe o codigo, nao o X-TV30-API-Version: /v100.0 lista so handles, /tv3 lista com url', async () => {
+test('a rota escolhe o codigo, nao o X-TV30-API-Version: /tv3 lista com url tambem com 100.0', async () => {
     const devPort = await freePort();
     const localPort = await freePort();
     portRange(devPort);
@@ -303,26 +282,21 @@ test('a rota escolhe o codigo, nao o X-TV30-API-Version: /v100.0 lista so handle
     const handle: string = r.json.handle;
     portRange(localPort);
 
-    // /v100.0 sem o cabecalho: o codigo da 100.0, sem abrir ponto de entrada
-    const handles = await call('GET', '/devices/teste', undefined, {}, BASE_V100);
-    assert.equal(handles.status, 200, JSON.stringify(handles.json));
-    assert.deepEqual(handles.json.devices.find((d: { handle: string }) => d.handle === handle), { handle, supportedTypes: ['light'] });
-    assert.equal(await listening(localPort), false);
-
-    // caminho publico com o cabecalho da 100.0: o codigo da 2.0 (C.6.15.5, com url)
+    // Public path with the header of 100.0: the code of 2.0 (C.6.15.5, with
+    // url).
     const withUrl = await call('GET', '/devices/teste', undefined, V100);
     assert.equal(withUrl.status, 200, JSON.stringify(withUrl.json));
     assert.equal(withUrl.json.devices.find((d: { handle: string }) => d.handle === handle).url, `ws://localhost:${localPort}`);
 
-    // as rotas por handle so existem sob /v100.0
+    // There are no routes by handle.
     for (const m of ['GET', 'DELETE']) expectError(await call(m, `/device/${handle}`, undefined, V100), 100);
-    expectError(await call100('GET', '/device/nao-existe'), 101);
 
-    assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
     assert.equal(await listening(localPort), false);
 });
 
-// certificado autoassinado como o do tls-init (infra/edgegateway/tls-init.sh); sem openssl, undefined
+// Self-signed certificate like the one of tls-init
+// (infra/edgegateway/tls-init.sh); without openssl, undefined.
 function selfSignedCert(): string | undefined {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv30-ws-tls-'));
     try {
@@ -346,7 +320,7 @@ const closed = (ws: WebSocket) => new Promise<void>(resolve => {
     if (ws.readyState === WebSocket.CLOSED) resolve(); else ws.once('close', () => resolve());
 });
 
-test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de entrada local em ws:// (C.6.15.5 e 100.0)', async (t) => {
+test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de entrada local em ws:// (C.6.15.5)', async (t) => {
     const dir = selfSignedCert();
     if (!dir) { t.skip('openssl indisponivel para gerar o certificado de teste'); return; }
     const saved = { dir: process.env.TV30_TLS_DIR, flag: process.env.TV3WS_WS_TLS };
@@ -368,24 +342,19 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
         assert.equal(list.json.devices.find((d: { handle: string }) => d.handle === handle).url, `ws://localhost:${localPort}`);
         (await connects(`ws://localhost:${localPort}`)).close();
 
-        assert.equal((await call100('DELETE', `/device/${handle}`)).status, 204);
-        const nextPort = await freePort();
-        portRange(nextPort);
-        const ep = await call100('GET', `/device/${handle}`);
-        assert.equal(ep.json.url, `ws://localhost:${nextPort}`);
-        (await connects(ep.json.url)).close();
-
-        // o aparelho que confia no serverCert conecta ao wss:// do registro
+        // The device that trusts the serverCert connects to the wss:// of the
+        // registration.
         const device = await connects(r.json.url, cert);
-        assert.equal((await call('DELETE', `/${handle}`)).status, 204);
+        assert.equal((await call('DELETE', `/${handle}`)).status, 200);
         await closed(device);
 
-        // TV3WS_WS_TLS=false vale so para o ponto de entrada do dispositivo remoto
+        // TV3WS_WS_TLS=false applies only to the entry point of the remote
+        // device.
         process.env.TV3WS_WS_TLS = 'false';
         portRange(devPort);
         const plain = await call('POST', '/', BODY);
         assert.equal(plain.json.url, `ws://localhost:${devPort}`);
-        assert.equal((await call('DELETE', `/${plain.json.handle}`)).status, 204);
+        assert.equal((await call('DELETE', `/${plain.json.handle}`)).status, 200);
     } finally {
         if (saved.dir === undefined) delete process.env.TV30_TLS_DIR; else process.env.TV30_TLS_DIR = saved.dir;
         process.env.TV3WS_WS_TLS = saved.flag ?? 'false';
@@ -395,7 +364,97 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
 });
 
 after(async () => {
-    // dispositivos que sobrarem de um teste que falhou: o descadastro fecha
-    // as portas e o processo pode sair
+    // Devices left by a failed test: deregistration closes the ports and the
+    // process can exit.
     for (const d of manager.getDevicesByClass('teste')) await manager.removeRemoteDevice(d.getHandle());
 });
+
+test('C.6.15.2 (2.0): corpo que nao e objeto JSON da 101; campo ausente 105; valor invalido 101; supportedTypes vazio aceito', async () => {
+    for (const route of ['/', '/handle-qualquer']) {
+        expectError(await call('POST', route, []), 101);
+        expectError(await call('POST', route, {}), 105);
+        expectError(await call('POST', route, { deviceClass: 'a' }), 105);
+        expectError(await call('POST', route, { deviceClass: '', supportedTypes: [] }), 101);
+        expectError(await call('POST', route, { deviceClass: 'a', supportedTypes: 'x' }), 101);
+        expectError(await call('POST', route, { deviceClass: 'a', supportedTypes: ['a', 1] }), 101);
+    }
+    const r = await call('POST', '/', { deviceClass: 'qualquer-classe', supportedTypes: [] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
+});
+
+test('C.6.15.2 (2.0): atualizacao troca classe e tipos e move o registro de classe; handle inexistente da 305', async () => {
+    const devPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const handle: string = r.json.handle;
+
+    const u = await call('POST', `/${handle}`, { deviceClass: 'outra', supportedTypes: ['wind'] });
+    assert.equal(u.status, 200, JSON.stringify(u.json));
+    assert.deepEqual(u.json, { handle });
+    const device = manager.getDeviceByHandle(handle)!;
+    assert.equal(device.getClass(), 'outra');
+    assert.deepEqual(device.getSupportedTypes(), ['wind']);
+    assert.deepEqual(manager.getDevicesByClass('teste').map(d => d.getHandle()), []);
+    assert.deepEqual(manager.getDevicesByClass('outra').map(d => d.getHandle()), [handle]);
+    assert.equal((store.get(`remote-device:${handle}`) as Record<string, string>).deviceClass, 'outra');
+    assert.ok((store.get('remote-devices:class:outra') as Set<string>).has(handle));
+    assert.equal(await listening(devPort), true, 'a porta do dispositivo continua');
+
+    expectError(await call('POST', '/nao-existe', BODY), 305);
+    assert.equal((await call('DELETE', `/${handle}`)).status, 200);
+});
+
+test('C.6.15.2 (2.0): sem identidade do cliente, 107; com ela, guardada em registeredBy no dispositivo e no espelho', async () => {
+    expectError(await call('POST', '/', BODY, {}), 107);
+    const devPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(manager.getDeviceByHandle(r.json.handle)!.registeredBy, 'dispositivo-1');
+    assert.equal((store.get(`remote-device:${r.json.handle}`) as Record<string, string>).registeredBy, 'dispositivo-1');
+    assert.equal((await call('DELETE', `/${r.json.handle}`)).status, 200);
+});
+
+test('2.0 (C.4.4): bloqueio do cliente e fim da aplicacao associada removem os registros que eles fizeram', async () => {
+    const devPort = await freePort();
+    portRange(devPort);
+    const blocked = await call('POST', '/', BODY);
+    const otherPort = await freePort();
+    portRange(otherPort);
+    const other = await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-2' });
+    assert.equal(other.status, 200, JSON.stringify(other.json));
+
+    deliver('aop/access-panel/client-blocked', 'dispositivo-1');
+    await waitForCondition(() => manager.getDeviceByHandle(blocked.json.handle) === undefined);
+    assert.equal(await listening(devPort), false, 'porta do registro removido fechada');
+    assert.ok(manager.getDeviceByHandle(other.json.handle), 'registro de outro cliente continua');
+
+    deliver('aop/application-lifecycle-manager/application-state',
+        JSON.stringify({ serviceContextId: 's', appId: 'a', origin: 'http://a', state: 'ended' }));
+    assert.ok(manager.getDeviceByHandle(other.json.handle), 'fim de aplicacao nao remove registro de cliente nao local');
+    assert.equal((await call('DELETE', `/${other.json.handle}`)).status, 200);
+});
+
+test('2.0 (C.4.4): registro do associado tem a identidade da aplicacao em execucao e sai no fim dela', async () => {
+    const app = { serviceContextId: 'urn:tv30:service:a', appId: 'app-a', origin: 'http://app-a' };
+    const STATE = 'aop/application-lifecycle-manager/application-state';
+    deliver(STATE, JSON.stringify({ ...app, state: 'started' }));
+    const devPort = await freePort();
+    portRange(devPort);
+    const r = await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'associated' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(manager.getDeviceByHandle(r.json.handle)!.registeredBy, 'urn:tv30:service:a/app-a');
+    deliver(STATE, JSON.stringify({ ...app, state: 'ended' }));
+    await waitForCondition(() => manager.getDeviceByHandle(r.json.handle) === undefined);
+    expectError(await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'associated' }), 107);
+});
+
+async function waitForCondition(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (!condition()) {
+        assert.ok(Date.now() - start < timeoutMs, 'condition not reached in time');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}

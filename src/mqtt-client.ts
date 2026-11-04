@@ -36,7 +36,8 @@ client.on('message', (topic, message) => {
 
     if (TOPIC_HANDLER.has(topic)) {
         TOPIC_HANDLER.get(topic)?.forEach(f => {
-            // rejeicao solta de handler assincrono derrubaria o processo (unhandled rejection)
+            // A loose rejection of an async handler would bring the process
+            // down (unhandled rejection).
             const pending = f(message.toString(), topic);
             if (pending instanceof Promise) {
                 pending.catch((err: Error) => console.error(`[mqtt] FALHA no handler de ${topic}: ${err?.message}`));

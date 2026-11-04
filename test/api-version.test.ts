@@ -1,5 +1,6 @@
-// API-Version (C.3.6.6) em toda resposta, inclusive erro, pelo app.ts inteiro (Redis e MQTT por dubles).
-// A versao vem da borda em X-TV30-API-Version; o Accept-Version nao e interpretado aqui.
+// API-Version (C.3.6.6) on every response, errors included, through the
+// whole app.ts (Redis and MQTT by doubles). The version comes in
+// X-TV30-API-Version; Accept-Version is not interpreted here.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -8,6 +9,7 @@ import { AddressInfo } from 'net';
 import { Server } from 'http';
 import { createFakeRedis } from './helpers/fake-redis';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
+import './helpers/v100-env';
 
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();
@@ -47,7 +49,8 @@ function expectError(r: Awaited<ReturnType<typeof call>>, code: number, apiVersi
 const decided = (v: string) => ({ headers: { 'X-TV30-API-Version': v } });
 
 test('a versao vem da borda (X-TV30-API-Version) e volta no API-Version, tambem nos erros', async () => {
-    expectError(await call('/tv3/current-service', decided('2.0')), 300, '2.0');   // sem servico em uso
+    // No service in use.
+    expectError(await call('/tv3/current-service', decided('2.0')), 300, '2.0');
     expectError(await call('/tv3/current-service', decided('100.0')), 300, '100.0');
     expectError(await call('/tv3/rota-que-nao-existe', decided('100.0')), 100, '100.0');
 });
@@ -74,16 +77,11 @@ test('JSON malformado no corpo (101 do errorHandler) tambem leva API-Version', a
     expectError(await call('/tv3/remote-device', init('100.0')), 101, '100.0');
 });
 
-test('extensao do testbed no caminho /v100.0: o tratador da 100.0 responde, com o API-Version da borda', async () => {
-    const r = await call('/v100.0/tv3/remote-device/devices/x', decided('100.0'));
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(r.apiVersion, '100.0');
-    assert.deepEqual(r.json, {});
-    expectError(await call('/v100.0/tv3/remote-device/device/x', decided('100.0')), 101, '100.0');   // handle inexistente
-    // a rota por handle so existe sob /v100.0; caminho sem tratador, 100 no formato C.3.2
-    expectError(await call('/tv3/remote-device/device/x', decided('100.0')), 100, '100.0');
+test('extensao do testbed no caminho /v100.0: rota sem tratador da 100.0 da 100, com API-Version 100.0', async () => {
     expectError(await call('/v100.0/tv3/rota-que-nao-existe', decided('100.0')), 100, '100.0');
-    expectError(await call('/v100.0/tv3/remote-device/devices/x', { method: 'DELETE', ...decided('100.0') }), 100, '100.0');
+    expectError(await call('/v100.0/tv3/remote-device/device/x', decided('100.0')), 100, '100.0');
+    // There are no routes by handle on the public path either.
+    expectError(await call('/tv3/remote-device/device/x', decided('100.0')), 100, '100.0');
 });
 
 test('resposta de sucesso: API-Version = a versao negociada pela borda', async () => {

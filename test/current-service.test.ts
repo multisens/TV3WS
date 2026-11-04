@@ -1,5 +1,7 @@
-// GET /tv3/current-service (C.6.3.1, Tabela C.8) pelo app.ts inteiro, com o core real e Redis e MQTT por
-// dubles: 300 quando nao ha servico em uso, "serviceId" omitido sem SLT e o aop/services consumido.
+// GET /tv3/current-service (C.6.3.1, Table C.8) through the whole app.ts,
+// with the real core and Redis and MQTT by doubles: 300 when there is no
+// service in use, "serviceId" omitted without an SLT, and aop/services
+// consumed.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -8,6 +10,7 @@ import { AddressInfo } from 'net';
 import { Server } from 'http';
 import { createFakeRedis } from './helpers/fake-redis';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
+import './helpers/v100-env';
 
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();
@@ -74,12 +77,13 @@ test('aop/services: a lista dos servicos anunciados pelo serviceContextId; o ser
     assert.equal(r.json.serviceContextId, SVC);
     assert.ok(!('serviceId' in r.json) && !('serviceName' in r.json), JSON.stringify(r.json));
 
-    // mensagem vazia (retido apagado): nenhum servico; item fora do formato fica de fora
+    // Empty message (retained deleted): no service; an item out of format is
+    // left out.
     await mqtt.deliver(TOPICS.services, '');
     assert.deepEqual(core.services, []);
     await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceId: 7 }, 'x', null]));
     assert.deepEqual(core.services, [{ serviceContextId: SVC }]);
-    // JSON invalido: loga e mantem a lista
+    // Invalid JSON: logs and keeps the list.
     const [errorOrig, logOrig] = [console.error, console.log];
     console.error = console.log = () => undefined;
     try {
@@ -114,7 +118,7 @@ test('session:current-service pela funcao: cinco campos, serviceId e serviceName
         fake.fcalls.length = 0;
         await mqtt.deliver(TOPICS.current_service, sid);
         await tick();
-        const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_sessao_servico');
+        const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_session_service');
         assert.equal(chamadas.length, 1, `uma chamada para o servico ${sid}`);
         const h = fake.store.get('session:current-service') as Record<string, string>;
         assert.deepEqual(Object.keys(h).sort(), ['originalNetworkId', 'serviceContextId', 'serviceId', 'serviceName', 'transportStreamId']);
@@ -122,20 +126,21 @@ test('session:current-service pela funcao: cinco campos, serviceId e serviceName
         assert.equal(h.serviceId, '', `serviceId de ${sid}`);
         assert.equal(h.serviceName, '', `serviceName de ${sid}`);
     }
-    // a funcao recusa (dado fora do esquema): o handler loga e segue de pe
+    // The function refuses (data outside the schema): the handler logs and
+    // stays up.
     const logs: string[] = [];
     const [logOrig, errorOrig] = [console.log, console.error];
     console.log = console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
-    fake.recusar('tv30_sessao_servico', 'TV30ESQUEMA tv30_sessao_servico: session:current-service campo serviceName: teste');
+    fake.recusar('tv30_session_service', 'TV30SCHEMA tv30_session_service: session:current-service field serviceName: test');
     try {
         await mqtt.deliver(TOPICS.current_service, '0');
         await tick();
         await tick();
     } finally {
-        fake.recusar('tv30_sessao_servico');
+        fake.recusar('tv30_session_service');
         [console.log, console.error] = [logOrig, errorOrig];
     }
-    assert.ok(logs.some(l => l.includes('session:current-service') && l.includes('TV30ESQUEMA')), `recusa logada: ${logs.join(' | ')}`);
+    assert.ok(logs.some(l => l.includes('session:current-service') && l.includes('TV30SCHEMA')), `recusa logada: ${logs.join(' | ')}`);
     assert.equal((await get()).status, 200, 'a API do servico corrente segue respondendo da memoria');
     await mqtt.deliver(TOPICS.current_service, '');
 });

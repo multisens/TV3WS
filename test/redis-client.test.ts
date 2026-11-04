@@ -1,5 +1,6 @@
-// Cliente Redis que falha rapido e explicitamente: ioredis real contra porta fechada e contra servidor que
-// aceita e nao responde (Redis congelado). O singleton e lazyConnect: importar nao abre socket.
+// A Redis client that fails fast and explicitly: real ioredis against a
+// closed port and against a server that accepts and does not answer (frozen
+// Redis). The singleton is lazyConnect: importing opens no socket.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net, { AddressInfo } from 'net';
@@ -71,7 +72,8 @@ test('log de eventos: primeira falha de cada sequencia, perda de conexao e recup
     try {
         logRedisEvents(ev as unknown as Redis, 'h:1', m => lines.push(m));
         ev.emit('error', new Error('connect ECONNREFUSED'));
-        ev.emit('error', new Error('connect ECONNREFUSED'));   // repetida: nao loga de novo
+        // Repeated: not logged again.
+        ev.emit('error', new Error('connect ECONNREFUSED'));
         ev.emit('ready');
         ev.emit('close');
         ev.emit('end');

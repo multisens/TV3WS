@@ -1,35 +1,41 @@
 import { randomBytes, ECDH } from 'crypto';
 import { base64UrlEncode, safeEqual } from '../../util';
 
-// Classes de cliente (C.4.1.1), definidas na autorizacao e gravadas na credencial, nunca pelo endereco.
-export type ClientClass = 'local-associated' | 'local-autonomous' | 'non-local';
+// Client classes (C.4.1.1), decided at authorization and written into the
+// credential.
+export type ClientClass = typeof CLIENT_CLASSES[number];
 
-// Material efemero do pareamento do cliente nao local (C.4.3, C.6.1.2.2):
-// chave simetrica, challenge e par ECDH (pm=kex). Vale ate o /tv3/token que
-// confere o challenge-response; ver takePairingMaterial.
+// Ephemeral pairing material of a non-local client (C.4.3, C.6.1.2.2):
+// symmetric key, challenge and ECDH pair (pm=kex), valid until the
+// /tv3/token that checks the challenge-response.
 export type PairingMaterial = {
     challenge?: Buffer<ArrayBufferLike>;
     secret?: Buffer<ArrayBufferLike>;
     ECDHKey?: {
-        privateKey: ECDH,
-        publicKey: Buffer<ArrayBufferLike>
+        privateKey: ECDH;
+        publicKey: Buffer<ArrayBufferLike>;
     };
 };
+
+export const CLIENT_CLASSES = ['associated', 'standAlone', 'nonLocal'] as const;
+
+// Size of the refresh token, in random bytes.
+const REFRESH_TOKEN_BYTES = 16;
 
 export default class Client {
     protected id: string;
     protected clientClass: ClientClass;
     protected refreshToken: string;
-    // SHA-256 da string aleatoria do desafio (C.6.1.2.2), em bytes
+    // SHA-256 of the random string of the challenge (C.6.1.2.2), as bytes.
     protected challenge?: Buffer<ArrayBufferLike>;
     protected secret?: Buffer<ArrayBufferLike>;
     protected ECDHKey?: {
-        privateKey: ECDH,
-        publicKey: Buffer<ArrayBufferLike>
-    }
+        privateKey: ECDH;
+        publicKey: Buffer<ArrayBufferLike>;
+    };
     protected accessToken?: string;
 
-    constructor(id: string, clientClass: ClientClass = 'local-autonomous') {
+    constructor(id: string, clientClass: ClientClass = 'standAlone') {
         this.id = id;
         this.clientClass = clientClass;
         this.refreshToken = this.createRefreshToken();
@@ -44,13 +50,16 @@ export default class Client {
     }
 
     public isLocal(): boolean {
-        return this.clientClass !== 'non-local';
+        return this.clientClass !== 'nonLocal';
     }
 
-    // Rehidrata um cliente do Redis; o material de pareamento e efemero e nao e restaurado.
+    // Rebuilds a client from Redis; the pairing material is ephemeral and is
+    // not restored.
     public restore(refreshToken: string, accessToken?: string): void {
         this.refreshToken = refreshToken;
-        if (accessToken) this.accessToken = accessToken;
+        if (accessToken) {
+            this.accessToken = accessToken;
+        }
     }
 
     public getRefreshToken(): string {
@@ -62,13 +71,16 @@ export default class Client {
         return this.refreshToken;
     }
 
-    // Tempo constante, e so texto vale: ?refresh-token=a&refresh-token=b chega como lista.
+    // Constant time, and only text is valid: ?refresh-token=a&refresh-token=b
+    // arrives as a list.
     public validateRefreshToken(refreshToken: string): boolean {
-        if (typeof refreshToken !== 'string') return false;
+        if (typeof refreshToken !== 'string') {
+            return false;
+        }
         return safeEqual(Buffer.from(this.refreshToken, 'utf8'), Buffer.from(refreshToken, 'utf8'));
     }
 
-    public setChallenge(hash: Buffer<ArrayBufferLike>) {
+    public setChallenge(hash: Buffer<ArrayBufferLike>): void {
         this.challenge = hash;
     }
 
@@ -76,8 +88,8 @@ export default class Client {
         return this.challenge;
     }
 
-    // Bytes, em tempo constante: com .toString() UTF-8, byte invalido vira U+FFFD, e respostas diferentes
-    // passariam como iguais.
+    // Bytes, in constant time: with a UTF-8 .toString(), an invalid byte
+    // becomes U+FFFD, and different responses would pass as equal.
     public validateChallenge(response: Buffer<ArrayBufferLike>): boolean {
         return this.challenge !== undefined && safeEqual(this.challenge, response);
     }
@@ -86,7 +98,7 @@ export default class Client {
         return this.challenge !== undefined && this.secret !== undefined;
     }
 
-    // O challenge vale uma vez. Se a emissao falhar, quem chama devolve o material com restorePairingMaterial.
+    // Removes and returns the pairing material: the challenge is valid once.
     public takePairingMaterial(): PairingMaterial {
         const material: PairingMaterial = { challenge: this.challenge, secret: this.secret, ECDHKey: this.ECDHKey };
         this.challenge = undefined;
@@ -101,29 +113,32 @@ export default class Client {
         this.ECDHKey = material.ECDHKey;
     }
 
-    public setSecret(key: Buffer<ArrayBufferLike>) {
+    public setSecret(key: Buffer<ArrayBufferLike>): void {
         this.secret = key;
     }
 
     public getSecret(): Buffer<ArrayBufferLike> {
-        return this.secret as Buffer<ArrayBufferLike>;
+        if (this.secret === undefined) {
+            throw Error(`Client ${this.id} has no pairing secret.`);
+        }
+        return this.secret;
     }
 
-    public setECDHKeys(privateKey: ECDH, publicKey: Buffer<ArrayBufferLike>) {
+    public setECDHKeys(privateKey: ECDH, publicKey: Buffer<ArrayBufferLike>): void {
         this.ECDHKey = {
             privateKey: privateKey,
-            publicKey: publicKey
-        }
+            publicKey: publicKey,
+        };
     }
 
     public getECDHPublicKey(): Buffer<ArrayBufferLike> {
-        if (this.ECDHKey === undefined)
+        if (this.ECDHKey === undefined) {
             throw Error(`Client ${this.id} has no ECDH key pair.`);
-
-        return this.ECDHKey?.publicKey;
+        }
+        return this.ECDHKey.publicKey;
     }
 
-    public setAccessToken(token: string) {
+    public setAccessToken(token: string): void {
         this.accessToken = token;
     }
 
@@ -132,10 +147,18 @@ export default class Client {
     }
 
     public getAccessToken(): string {
-        return this.accessToken as string;
+        if (this.accessToken === undefined) {
+            throw Error(`Client ${this.id} has no access token.`);
+        }
+        return this.accessToken;
     }
 
     protected createRefreshToken(): string {
-        return base64UrlEncode(randomBytes(16));
+        return base64UrlEncode(randomBytes(REFRESH_TOKEN_BYTES));
     }
+}
+
+// Whether the value is one of the client classes.
+export function isClientClass(value: unknown): value is ClientClass {
+    return CLIENT_CLASSES.some(c => c === value);
 }

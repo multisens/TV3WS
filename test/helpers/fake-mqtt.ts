@@ -1,5 +1,6 @@
-// Duble do src/mqtt-client.ts (default + TOPICS + client), sem broker. deliver(topico, mensagem) chama
-// os tratadores registrados, como a chegada de uma mensagem.
+// Double of src/mqtt-client.ts (default, TOPICS and client), without a
+// broker. deliver(topic, message) calls the registered handlers, as the
+// arrival of a message.
 type Handler = (m: string, t?: string) => void | Promise<void>;
 
 export const TOPICS = {
@@ -29,9 +30,9 @@ export function createFakeMqtt() {
         },
     };
     const client = {
-        on() { /* sem broker */ },
-        subscribe() { /* sem broker */ },
-        unsubscribe() { /* sem broker */ },
+        on() { /* no broker */ },
+        subscribe() { /* no broker */ },
+        unsubscribe() { /* no broker */ },
         publish(t: string, m: string) { published.push([t, m]); },
     };
 
