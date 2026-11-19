@@ -6,6 +6,9 @@ import { AppNode } from "./modules/remotedevice-manager/remote-device";
 import { associateAppNodes, disassociateAppNodes } from "./modules/remotedevice-manager/manager";
 import * as redisFunctions from './redis-functions';
 import { integerServiceId } from './util/service-id';
+import { Application, onAssociatedEnded, onAssociatedStarted } from './modules/associated-app';
+import redis from './redis-client';
+import { z } from 'zod';
 dotenv.config();
 
 type CoreData = {
@@ -13,10 +16,10 @@ type CoreData = {
     url: string;
     localIP: string;
   };
+  // The running application, for the nodes of its document.
   app: {
     sid: string;
     id: string;
-    url: string;
     nodes: AppNode[];
   };
   // aop/services (infra/mqtt-broker/plugin/config/schemas.json)
@@ -32,6 +35,16 @@ type CoreData = {
   };
 };
 
+// app:doc-nodes:{serviceContextId}, of the Ginga-NCL formatter: the nodes of
+// the document of each application, by appId.
+const DOC_NODES_KEY_PREFIX = 'app:doc-nodes:';
+const AppNodeListSchema = z.array(z.object({
+  id: z.string().min(1),
+  type: z.enum(['media', 'context', 'switch']),
+  mimeType: z.string().min(1),
+  device: z.string().min(1),
+}));
+
 const data: CoreData = {
   server: {
     url: process.env.SERVER_URL as string,
@@ -40,7 +53,6 @@ const data: CoreData = {
   app: {
     sid: "",
     id: "",
-    url: "",
     nodes: [],
   },
   services: [],
@@ -71,94 +83,40 @@ function getLocalIP(): string {
     return '127.0.0.1';
 }
 
-// aop/<sid>/currentApp carries the current appId, retained; an empty message
-// is the end of the application. Changing or ending it clears app.url, the
-// directory C.6.4.7 reads from, so that the one of the previous application
-// is not served; without a directory, 305.
-function setAppId(appid: string): void {
-  if (data.app.id == appid) return;
-
-  if (data.app.sid && data.app.id) {
-    let t = mqttClient.parseTopic(TOPICS.app_path, {
-      serviceId: data.app.sid,
-      appId: data.app.id,
-    });
-    mqttClient.removeTopicHandler(t, setAppBaseURL);
-
-    t = mqttClient.parseTopic(TOPICS.app_nodes, {
-      serviceId: data.app.sid,
-      appId: data.app.id,
-    });
-    mqttClient.removeTopicHandler(t, setAppNodes);
-  }
-
-  data.app.url = "";
-
-  if (appid) {
-    let t = mqttClient.parseTopic(TOPICS.app_path, {
-      serviceId: data.app.sid,
-      appId: appid,
-    });
-    mqttClient.addTopicHandler(t, setAppBaseURL);
-
-    t = mqttClient.parseTopic(TOPICS.app_nodes, {
-      serviceId: data.app.sid,
-      appId: appid,
-    });
-    mqttClient.addTopicHandler(t, setAppNodes);
-  }
-
-  data.app.id = appid;
+// The nodes of the document of the application that starts, from
+// app:doc-nodes:{serviceContextId}, associated to their devices; without
+// nodes, none. The application that ends releases them.
+async function onApplicationStarted(application: Application): Promise<void> {
+  const raw = await redis.hget(docNodesKey(application.serviceContextId), application.appId);
+  const nodes = raw === null ? [] : AppNodeListSchema.parse(JSON.parse(raw));
+  disassociateAppNodes();
+  data.app.sid = application.serviceContextId;
+  data.app.id = application.appId;
+  // The values of NodeType, as the schema lists them.
+  data.app.nodes = nodes as AppNode[];
+  associateAppNodes();
 }
 
-function setAppBaseURL(path: string): void {
-  if (!path) return;
-
-  data.app.url = path;
+function onApplicationEnded(associatedId: string): void {
+  if (associatedId !== `${data.app.sid}/${data.app.id}`) {
+    return;
+  }
+  disassociateAppNodes();
+  data.app.sid = '';
+  data.app.id = '';
+  data.app.nodes = [];
 }
 
-function setAppNodes(nodes: string) {
-  if (nodes) {
-    data.app.nodes = JSON.parse(nodes);
-    associateAppNodes();
-  }
-  else {
-    disassociateAppNodes();
-  }
+function docNodesKey(serviceContextId: string): string {
+  return `${DOC_NODES_KEY_PREFIX}${serviceContextId}`;
 }
+
+onAssociatedStarted(onApplicationStarted);
+onAssociatedEnded(onApplicationEnded);
 
 function currentService(sid: string): void {
-  if (sid == data.app.sid) return;
+  if (sid == data.current.serviceContextId) return;
 
-  if (data.app.sid) {
-    let t = mqttClient.parseTopic(TOPICS.current_app, {
-      serviceId: data.app.sid,
-    });
-    mqttClient.removeTopicHandler(t, setAppId);
-
-    if (data.app.id) {
-      let t = mqttClient.parseTopic(TOPICS.app_path, {
-        serviceId: data.app.sid,
-        appId: data.app.id,
-      });
-      mqttClient.removeTopicHandler(t, setAppBaseURL);
-
-      t = mqttClient.parseTopic(TOPICS.app_nodes, {
-        serviceId: data.app.sid,
-        appId: data.app.id,
-      });
-      mqttClient.removeTopicHandler(t, setAppNodes);
-    }
-  }
-  if (sid) {
-    let t = mqttClient.parseTopic(TOPICS.current_app, { serviceId: sid });
-    mqttClient.addTopicHandler(t, setAppId);
-  }
-
-  data.app.sid = sid;
-  data.app.id = "";
-  data.app.url = "";
-  data.app.nodes = [];
   // Without an SLT there is no serviceId or serviceName: aop/services carries
   // only the serviceContextId.
   data.current.serviceId = -1;

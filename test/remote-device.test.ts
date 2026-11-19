@@ -32,7 +32,7 @@ function stub(rel: string, exports: object): void {
     m.exports = { __esModule: true, ...exports };
     require.cache[file] = m;
 }
-const fakeCore = { app: { sid: '', id: '', url: '', nodes: [] }, server: { url: 'localhost' } };
+const fakeCore = { app: { sid: '', id: '', nodes: [] }, server: { url: 'localhost' } };
 stub('redis-client', { default: fake.redis });
 stub('core', { default: fakeCore });
 const topicHandlers = new Map<string, ((m: string) => void)[]>();
@@ -440,12 +440,15 @@ test('2.0 (C.4.4): bloqueio do cliente e fim da aplicacao associada removem os r
 test('2.0 (C.4.4): registro do associado tem a identidade da aplicacao em execucao e sai no fim dela', async () => {
     const app = { serviceContextId: 'urn:tv30:service:a', appId: 'app-a', origin: 'http://app-a' };
     const STATE = 'aop/application-lifecycle-manager/application-state';
+    // The lifecycle manager writes session:current-app before announcing.
+    store.set('session:current-app', { ...app });
     deliver(STATE, JSON.stringify({ ...app, state: 'started' }));
     const devPort = await freePort();
     portRange(devPort);
     const r = await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'associated' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(manager.getDeviceByHandle(r.json.handle)!.registeredBy, 'urn:tv30:service:a/app-a');
+    store.delete('session:current-app');
     deliver(STATE, JSON.stringify({ ...app, state: 'ended' }));
     await waitForCondition(() => manager.getDeviceByHandle(r.json.handle) === undefined);
     expectError(await call('POST', '/', BODY, { 'X-TV30-Client-Class': 'associated' }), 107);

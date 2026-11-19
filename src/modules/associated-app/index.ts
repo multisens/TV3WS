@@ -1,11 +1,20 @@
 import { z } from 'zod';
 import logger from '../../logger';
 import mqttClient from '../../mqtt-client';
+import redis from '../../redis-client';
 
-type EndedListener = (associatedId: string) => void;
-
-// Change of state of an application, published by the Application
+// The running broadcaster application, read from session:current-app at each
+// call, and the changes of its state, published by the Application
 // Lifecycle Manager (ABNT NBR 25608, Section 6).
+
+export type Application = {
+    serviceContextId: string;
+    appId: string;
+};
+
+type StartedListener = (application: Application) => void | Promise<void>;
+type EndedListener = (associatedId: string) => void | Promise<void>;
+
 const ApplicationStateSchema = z.object({
     serviceContextId: z.string().min(1),
     appId: z.string(),
@@ -14,17 +23,32 @@ const ApplicationStateSchema = z.object({
 });
 type ApplicationState = z.infer<typeof ApplicationStateSchema>;
 
-const APPLICATION_STATE_TOPIC = 'aop/application-lifecycle-manager/application-state';
+// Hash of aop-application-lifecycle-manager; absent when no broadcaster
+// application is running.
+const CurrentAppSchema = z.object({
+    serviceContextId: z.string().min(1),
+    appId: z.string().min(1),
+});
 
-// Identity of the running associated application, or undefined when none
-// is running
-let currentId: string | undefined;
+const APPLICATION_STATE_TOPIC = 'aop/application-lifecycle-manager/application-state';
+const CURRENT_APP_KEY = 'session:current-app';
+
+const startedListeners: StartedListener[] = [];
 const endedListeners: EndedListener[] = [];
 
 // Identity of the associated local client: the running application, as
 // serviceContextId/appId; undefined when no application is running.
-export function currentAssociatedId(): string | undefined {
-    return currentId;
+export async function currentAssociatedId(): Promise<string | undefined> {
+    const hash = await redis.hgetall(CURRENT_APP_KEY);
+    if (Object.keys(hash).length === 0) {
+        return undefined;
+    }
+    return associatedIdOf(CurrentAppSchema.parse(hash));
+}
+
+// Registers a function called with each application that starts.
+export function onAssociatedStarted(listener: StartedListener): void {
+    startedListeners.push(listener);
 }
 
 // Registers a function called with the identity of each application that
@@ -33,8 +57,8 @@ export function onAssociatedEnded(listener: EndedListener): void {
     endedListeners.push(listener);
 }
 
-// Keeps the identity of the application that starts; on the end, forgets it
-// and calls the ended listeners. An invalid message is logged and ignored.
+// Calls the listeners of the state; an invalid message is logged and
+// ignored.
 function onApplicationState(message: string): void {
     let state: ApplicationState;
     try {
@@ -43,17 +67,16 @@ function onApplicationState(message: string): void {
         logger.error(`[associated-app] invalid message in ${APPLICATION_STATE_TOPIC}: ${(err as Error).message}`);
         return;
     }
-    const id = associatedIdOf(state);
+    const application: Application = { serviceContextId: state.serviceContextId, appId: state.appId };
     switch (state.state) {
         case 'started':
-            currentId = id;
+            for (const listener of startedListeners) {
+                void notify(() => listener(application));
+            }
             break;
         case 'ended':
-            if (currentId === id) {
-                currentId = undefined;
-            }
             for (const listener of endedListeners) {
-                listener(id);
+                void notify(() => listener(associatedIdOf(application)));
             }
             break;
         default:
@@ -61,8 +84,18 @@ function onApplicationState(message: string): void {
     }
 }
 
-function associatedIdOf(state: ApplicationState): string {
-    return `${state.serviceContextId}/${state.appId}`;
+// The failure of a listener is logged and does not stop the others; the
+// returned promise never rejects.
+async function notify(call: () => void | Promise<void>): Promise<void> {
+    try {
+        await call();
+    } catch (err) {
+        logger.error(`[associated-app] listener failed: ${(err as Error).message}`);
+    }
+}
+
+function associatedIdOf(application: Application): string {
+    return `${application.serviceContextId}/${application.appId}`;
 }
 
 mqttClient.addTopicHandler(APPLICATION_STATE_TOPIC, onApplicationState);

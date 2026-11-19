@@ -9,7 +9,7 @@ export const CLIENT_ID_HEADER = 'X-TV30-Client-Id';
 // Identity of the client of the request: for the associated one, the
 // running application; for the others, the clientid written by the edge;
 // undefined when there is none.
-export function requestClientId(req: Request): string | undefined {
+export async function requestClientId(req: Request): Promise<string | undefined> {
     if (req.get(CLIENT_CLASS_HEADER) === 'associated') {
         return currentAssociatedId();
     }
@@ -18,8 +18,8 @@ export function requestClientId(req: Request): string | undefined {
 
 // Stores the identity of the client in res.locals.clientId; responds error
 // 107 when the request has none.
-export function requireClientId(req: Request, res: Response, next: NextFunction): void {
-    const clientId = requestClientId(req);
+export async function requireClientId(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const clientId = await requestClientId(req);
     if (clientId === undefined) {
         returnError(res, 107, 'client not identified');
         return;

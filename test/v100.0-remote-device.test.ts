@@ -47,10 +47,17 @@ const STATE_TOPIC = 'aop/application-lifecycle-manager/application-state';
 const APP_A = { serviceContextId: 'urn:tv30:service:a', appId: 'app-a', origin: 'http://app-a.apps.localhost:8080' };
 const APP_B = { serviceContextId: 'urn:tv30:service:b', appId: 'app-b', origin: 'http://app-b.apps.localhost:8080' };
 
-// Publishes the change of state of the application, as the Application
-// Lifecycle Manager does
-const startApplication = (app: typeof APP_A) => mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'started' }));
-const endApplication = (app: typeof APP_A) => mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'ended' }));
+// Writes session:current-app and publishes the change of state of the
+// application, as the Application Lifecycle Manager does
+const CURRENT_APP_KEY = 'session:current-app';
+const startApplication = (app: typeof APP_A) => {
+    fake.store.set(CURRENT_APP_KEY, { ...app });
+    return mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'started' }));
+};
+const endApplication = (app: typeof APP_A) => {
+    fake.store.delete(CURRENT_APP_KEY);
+    return mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'ended' }));
+};
 const VALID_BODY = { deviceClass: 'c', supportedTypes: ['t'] };
 
 let server: Server;

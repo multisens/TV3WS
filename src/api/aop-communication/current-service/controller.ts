@@ -16,7 +16,7 @@ type CurrentServiceResponse = {
 // a known integer value is omitted (C.3.2.2).
 // TODO: error 302 is not emitted (C.6.3.1).
 function GETCurrentService(req: Request, res: Response): void {
-	if (!core.app.sid) {
+	if (!core.current.serviceContextId) {
 		returnError(res, 300);
 		return;
 	}

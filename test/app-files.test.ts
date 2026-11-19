@@ -1,18 +1,19 @@
-// GET /tv3/current-service/apps/<appId>/files (C.6.4.7, Table C.17) through
-// the whole app.ts, with the real core and Redis and MQTT by doubles. The
-// directory of the application is a temporary tree, with a file and a
-// directory outside next to it.
+// GET /tv3/current-service/apps/<appId>/files (ABNT NBR 25608, C.6.4.7,
+// Table C.17) through the whole app.ts, with Redis and MQTT by doubles and the
+// object proxy by an HTTP server that serves the received files of each
+// context origin.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'crypto';
 import Module from 'module';
-import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { AddressInfo } from 'net';
 import http, { Server } from 'http';
 import { createFakeRedis } from './helpers/fake-redis';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
 import './helpers/v100-env';
+
+type Served = { contentType: string; body: Buffer };
 
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();
@@ -28,259 +29,190 @@ function stub(rel: string, exports: object): void {
 stub('redis-client', { default: fake.redis });
 stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const app = require('../src/app').default;
+const SERVICE_ID = 1002;
+const APPS_DOMAIN = 'apps.localhost';
+const CONTEXT_A = 'urn:sbtvd:app:1002:a';
+const CONTEXT_B = 'urn:sbtvd:app:1002:b';
+const APP_A = 'urn:sbtvd:app:1002:principal';
+const APP_B = 'urn:sbtvd:app:1002:outra';
+const BOUNDARY = 'pkg-1';
+const PACKAGE_BODY = Buffer.from(
+    `--${BOUNDARY}\r\nContent-Type: text/html\r\nContent-Location: index.html\r\n\r\n<p>ola</p>\r\n`
+    + `--${BOUNDARY}\r\nContent-Type: text/javascript\r\nContent-Location: js/app.js\r\n\r\nrun();\r\n`
+    + `--${BOUNDARY}--\r\n`);
+const VIDEO = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-// --- test tree ---------------------------------------------------------------
-const SEGREDO = 'SEGREDO-FORA-DA-APLICACAO';
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tv3ws-appfiles-'));
-const appDir = path.join(root, 'app');
-const fora = path.join(root, 'fora');
-fs.mkdirSync(path.join(appDir, 'sub', 'deep'), { recursive: true });
-fs.mkdirSync(fora);
-fs.writeFileSync(path.join(root, 'segredo.txt'), SEGREDO);
-fs.writeFileSync(path.join(fora, 'segredo2.txt'), SEGREDO + '-2');
-fs.writeFileSync(path.join(appDir, 'a.txt'), 'conteudo a');
-fs.writeFileSync(path.join(appDir, 'index.html'), '<html></html>');
-fs.writeFileSync(path.join(appDir, '.oculto'), 'x');
-// A name that starts with ".." and is INSIDE (not the parent directory).
-fs.writeFileSync(path.join(appDir, '..dados.txt'), 'dados');
-fs.writeFileSync(path.join(appDir, 'video.mp4'), Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
-fs.writeFileSync(path.join(appDir, 'sub', 'b.txt'), 'conteudo b');
-fs.writeFileSync(path.join(appDir, 'sub', 'deep', 'c.txt'), 'c');
-// Directory links to the outside and to the inside ('junction' on Windows
-// needs no privilege; on Linux the type is ignored).
-fs.symlinkSync(fora, path.join(appDir, 'link-fora'), 'junction');
-fs.symlinkSync(path.join(appDir, 'sub'), path.join(appDir, 'link-dentro'), 'junction');
-// A file link to the outside: on Windows it needs privilege (or developer
-// mode); without it, the case is skipped.
-let fileLink = true;
-try { fs.symlinkSync(path.join(root, 'segredo.txt'), path.join(appDir, 'arq-fora.txt'), 'file'); } catch { fileLink = false; }
+// tsi 10 for context A (by the flow), tsi 11 with a file of A (by the file)
+// and one of B.
+const STSID = { RS: [{ LS: [
+    { tsi: 10, SrcFlow: { EFDT: { 'FDT-Instance': { appContextIdList: [CONTEXT_A], File: [
+        { 'Content-Location': 'app.pkg', 'Content-Type': 'multipart/related',
+            'Content-Length': PACKAGE_BODY.length, 'Transfer-Length': PACKAGE_BODY.length },
+        { 'Content-Location': 'media/clip.mp4', 'Content-Type': 'video/mp4',
+            'Content-Length': VIDEO.length, 'Transfer-Length': VIDEO.length },
+        { 'Content-Location': 'media/late.txt', 'Content-Type': 'text/plain',
+            'Content-Length': 4, 'Transfer-Length': 4 },
+    ] } } } },
+    { tsi: 11, SrcFlow: { EFDT: { 'FDT-Instance': { File: [
+        { 'Content-Location': 'aviso.txt', 'Content-Type': 'text/plain',
+            'Content-Length': 5, 'Transfer-Length': 5, appContextIdList: [CONTEXT_A] },
+        { 'Content-Location': 'marca.txt', 'Content-Type': 'text/plain',
+            'Content-Length': 3, 'Transfer-Length': 3, appContextIdList: [CONTEXT_B] },
+    ] } } } },
+] }] };
+const BALD = { EntryPackage: [
+    { appId: APP_A, appContextId: CONTEXT_A },
+    { appId: APP_B, appContextId: CONTEXT_B },
+] };
 
-const SID = '1';
-const APP = 'app1';
+// Received files by context label and path; media/late.txt is not received.
+const received = new Map<string, Map<string, Served>>([
+    [contextLabel(CONTEXT_A), new Map([
+        ['app.pkg', { contentType: `multipart/related; type="text/html"; boundary=${BOUNDARY}`, body: PACKAGE_BODY }],
+        ['index.html', { contentType: 'text/html', body: Buffer.from('<p>ola</p>') }],
+        ['js/app.js', { contentType: 'text/javascript', body: Buffer.from('run();') }],
+        ['media/clip.mp4', { contentType: 'video/mp4', body: VIDEO }],
+        ['aviso.txt', { contentType: 'text/plain', body: Buffer.from('aviso') }],
+    ])],
+    [contextLabel(CONTEXT_B), new Map()],
+]);
 
+let app: { listen: (port: number, host: string, callback: () => void) => Server };
 let server: Server;
+let proxy: Server;
 let base = '';
+
 before(async () => {
-    server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    proxy = http.createServer((req, res) => {
+        const label = (req.headers.host ?? '').replace(`.${APPS_DOMAIN}`, '');
+        const file = received.get(label)?.get(decodeURIComponent((req.url ?? '/').slice(1)));
+        if (file === undefined) {
+            res.writeHead(404).end('not in the carousel nor in the cache');
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': file.contentType }).end(file.body);
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', () => resolve()));
+    process.env.OBJECT_PROXY_URL = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}/`;
+    process.env.APPS_DOMAIN = APPS_DOMAIN;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    app = require('../src/app').default;
+    server = await new Promise<Server>((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3/current-service/apps`;
-    await mqtt.deliver(TOPICS.current_service, SID);
-    await mqtt.deliver(`aop/${SID}/currentApp`, APP);
-    await mqtt.deliver(`aop/${SID}/${APP}/path`, appDir);
-});
-after(async () => {
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true });
 });
 
-// GET with a hand-written query (encodings, backslash, NUL...).
-async function files(rawQuery?: string, appId = APP, headers: Record<string, string> = {}) {
-    const res = await fetch(`${base}/${appId}/files${rawQuery === undefined ? '' : `?${rawQuery}`}`, { headers });
+after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => proxy.close(() => resolve()));
+});
+
+function contextLabel(appContextId: string): string {
+    return 'ctx-' + crypto.createHash('sha256').update(appContextId, 'utf8').digest('hex').slice(0, 16);
+}
+
+async function tune(): Promise<void> {
+    await mqtt.deliver(TOPICS.tuned, JSON.stringify({ serviceId: SERVICE_ID, rfChannelId: 10, tunedAt: '2026-11-19T12:00:00Z' }));
+    await mqtt.deliver(`tlm/sls/${SERVICE_ID}/bald`, JSON.stringify(BALD));
+    await mqtt.deliver(`tlm/sls/${SERVICE_ID}/stsid`, JSON.stringify(STSID));
+}
+
+async function files(appId: string, rawQuery?: string, headers: Record<string, string> = {}) {
+    const query = rawQuery === undefined ? '' : `?${rawQuery}`;
+    const res = await fetch(`${base}/${encodeURIComponent(appId)}/files${query}`, { headers });
     const type = res.headers.get('content-type') ?? '';
     const raw = Buffer.from(await res.arrayBuffer());
     const text = raw.toString('utf8');
-    return { status: res.status, type, raw, text, json: /json/.test(type) ? JSON.parse(text) : undefined };
-}
-const expect305 = (r: Awaited<ReturnType<typeof files>>, what: string) => {
-    assert.equal(r.status, 404, `${what}: ${r.status} ${r.text.slice(0, 120)}`);
-    assert.match(r.type, /application\/json/, what);
-    assert.equal(r.json.error, 305, `${what}: ${r.text}`);
-    assert.ok(!r.text.includes(SEGREDO), `${what}: conteudo de fora na resposta`);
-};
-
-// --- cases -------------------------------------------------------------------
-test('path que sai do diretorio da aplicacao (.., codificado, barra invertida, NUL, absoluto): 305 sem o conteudo de fora', async () => {
-    const abs = path.join(root, 'segredo.txt').replace(/\\/g, '/');
-    // Absolute on another drive on Windows: path.relative returns an absolute
-    // path; on Linux it becomes relative to the base.
-    const otherDrive = path.join(process.cwd(), 'package.json').replace(/\\/g, '/');
-    const cases = [
-        'path=../segredo.txt',
-        'path=..%2fsegredo.txt',
-        'path=%2e%2e%2fsegredo.txt',
-        'path=%2E%2E/segredo.txt',
-        'path=/../segredo.txt',
-        'path=sub/../../segredo.txt',
-        'path=sub/deep/../../../segredo.txt',
-        'path=../app/../segredo.txt',
-        'path=../fora/segredo2.txt',
-        // Backslash.
-        'path=..%5csegredo.txt',
-        'path=sub%5c..%5c..%5csegredo.txt',
-        `path=${encodeURIComponent(otherDrive)}`,
-        // A backslash does not separate, not even inside (on Windows it would).
-        'path=sub%5cb.txt',
-        // NUL
-        'path=a.txt%00',
-        'path=%00../segredo.txt',
-        // Absolute: read from the base.
-        `path=${encodeURIComponent(abs)}`,
-        // Encoded twice: the literal name "%2e%2e%2f...".
-        'path=%252e%252e%252fsegredo.txt',
-        // Parent directory.
-        'path=..',
-        'path=../fora',
-        // Repeated parameter (a list).
-        'path=a.txt&path=../segredo.txt',
-    ];
-    for (const q of cases) expect305(await files(q), q);
-});
-
-test('link simbolico: vale o destino, e o destino fora do diretorio da aplicacao da 305', async (t) => {
-    expect305(await files('path=link-fora/segredo2.txt'), 'link-fora/segredo2.txt');
-    expect305(await files('path=link-fora'), 'link-fora (listagem)');
-    const ok = await files('path=link-dentro/b.txt');
-    assert.equal(ok.status, 200, ok.text);
-    assert.equal(ok.text, 'conteudo b');
-    if (fileLink) expect305(await files('path=arq-fora.txt'), 'arq-fora.txt');
-    else t.diagnostic('link simbolico de arquivo nao criado (sem privilegio no Windows): caso arq-fora.txt pulado');
-});
-
-test('arquivo dentro do diretorio da aplicacao: 200 com o conteudo e o MIME da extensao; barra inicial opcional', async () => {
-    for (const q of ['path=a.txt', 'path=/a.txt', 'path=//a.txt', 'path=sub/../a.txt', 'path=%61.txt']) {
-        const r = await files(q);
-        assert.equal(r.status, 200, `${q}: ${r.text}`);
-        assert.match(r.type, /^text\/plain/, q);
-        assert.equal(r.text, 'conteudo a', q);
-    }
-    const b = await files('path=sub/b.txt');
-    assert.equal(b.status, 200);
-    assert.equal(b.text, 'conteudo b');
-    // A name starting with "..", inside the directory.
-    const d = await files('path=..dados.txt');
-    assert.equal(d.status, 200, d.text);
-    assert.equal(d.text, 'dados');
-    // Without a known MIME type: application/octet-stream (Table C.17).
-    const h = await files('path=index.html');
-    assert.equal(h.status, 200);
-    assert.match(h.type, /^application\/octet-stream/);
-});
-
-test('arquivo inexistente: 305', async () => {
-    expect305(await files('path=nao-existe.txt'), 'nao-existe.txt');
-    expect305(await files('path=sub/nao-existe/x.txt'), 'sub/nao-existe/x.txt');
-    // ENOTDIR
-    expect305(await files('path=a.txt/x'), 'a.txt/x');
-});
-
-test('path omitido, vazio ou "/": listagem do primeiro nivel da aplicacao no formato da Tabela C.17', async () => {
-    // arq-fora.txt and link-fora (target outside) are left out; link-dentro is
-    // listed by its target.
-    const expected = {
-        files: [
-            { name: '..dados.txt', size: 5 },
-            { name: '.oculto', size: 1 },
-            { name: 'a.txt', size: 10 },
-            { name: 'index.html', size: 13 },
-            { name: 'video.mp4', size: 10 },
-        ],
-        dirs: [{ name: 'link-dentro' }, { name: 'sub' }],
-    };
-    for (const q of [undefined, 'path=', 'path=/', 'path=.', 'path=sub/..']) {
-        const r = await files(q);
-        assert.equal(r.status, 200, `${q}: ${r.text}`);
-        assert.match(r.type, /application\/json/, String(q));
-        assert.deepEqual(r.json, expected, String(q));
-    }
-});
-
-test('path de diretorio: listagem dele (arquivos com tamanho, diretorios so com nome)', async () => {
-    for (const q of ['path=sub', 'path=sub/', 'path=/sub', 'path=link-dentro']) {
-        const r = await files(q);
-        assert.equal(r.status, 200, `${q}: ${r.text}`);
-        assert.deepEqual(r.json, { files: [{ name: 'b.txt', size: 10 }], dirs: [{ name: 'deep' }] }, q);
-    }
-});
-
-// GET by the http module, with the path of the URL as written: fetch
-// normalizes ".." and "%2e%2e" (dot segments) before sending.
-function rawGet(urlPath: string): Promise<{ status: number; text: string; json: any }> {
-    const { port } = server.address() as AddressInfo;
-    return new Promise((resolve, reject) => {
-        http.get({ host: '127.0.0.1', port, path: urlPath }, res => {
-            const chunks: Buffer[] = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => {
-                const text = Buffer.concat(chunks).toString('utf8');
-                let json: any;
-                try { json = JSON.parse(text); } catch { json = undefined; }
-                resolve({ status: res.statusCode ?? 0, text, json });
-            });
-        }).on('error', reject);
-    });
+    return { status: res.status, type, raw, text, headers: res.headers, json: /json/.test(type) ? JSON.parse(text) : undefined };
 }
 
-test('appId que nao e o da aplicacao corrente: 305; o appId nao entra no caminho', async () => {
-    for (const id of ['outra', '..', '%2e%2e', '..%2F..', '..%2Fapp', '%2e%2e%2f%2e%2e']) {
-        for (const q of ['?path=a.txt', '']) {
-            const r = await rawGet(`/tv3/current-service/apps/${id}/files${q}`);
-            assert.equal(r.status, 404, `appId ${id}${q}: ${r.text}`);
-            assert.equal(r.json?.error, 305, `appId ${id}${q}: ${r.text}`);
-        }
+function expectError(r: Awaited<ReturnType<typeof files>>, code: number, what: string): void {
+    assert.equal(r.json?.error, code, `${what}: ${r.status} ${r.text.slice(0, 120)}`);
+}
+
+test('without a tuned service: 300', async () => {
+    expectError(await files(APP_A), 300, 'not tuned');
+});
+
+test('base listing: the files of the context in the S-TSID, with the parts of the received package', async () => {
+    await tune();
+    for (const query of [undefined, 'path=', 'path=/']) {
+        const r = await files(APP_A, query);
+        assert.equal(r.status, 200, r.text);
+        assert.deepEqual(r.json, {
+            files: [
+                { name: 'app.pkg', size: PACKAGE_BODY.length },
+                { name: 'aviso.txt', size: 5 },
+                { name: 'index.html', size: 10 },
+            ],
+            dirs: [{ name: 'js' }, { name: 'media' }],
+        }, String(query));
     }
 });
 
-test('Range em video dentro do diretorio: 206 com o trecho', async () => {
-    const r = await files('path=video.mp4', APP, { Range: 'bytes=2-5' });
+test('directory listing: received or not, with the size of the S-TSID; trailing slash optional', async () => {
+    await tune();
+    for (const query of ['path=media', 'path=/media/']) {
+        const r = await files(APP_A, query);
+        assert.deepEqual(r.json, {
+            files: [{ name: 'clip.mp4', size: VIDEO.length }, { name: 'late.txt', size: 4 }],
+            dirs: [],
+        }, query);
+    }
+});
+
+test('file: the content through the object proxy, with the MIME of the extension; leading slash optional', async () => {
+    await tune();
+    for (const query of ['path=js/app.js', 'path=/js/app.js']) {
+        const r = await files(APP_A, query);
+        assert.equal(r.status, 200, r.text);
+        assert.equal(r.text, 'run();');
+        assert.match(r.type, /^text\/javascript/);
+    }
+    const unknown = await files(APP_A, 'path=app.pkg');
+    assert.equal(unknown.type, 'application/octet-stream');
+    assert.deepEqual(unknown.raw, PACKAGE_BODY);
+});
+
+test('Range on a video: 206 with the slice', async () => {
+    await tune();
+    const r = await files(APP_A, 'path=media/clip.mp4', { Range: 'bytes=2-5' });
     assert.equal(r.status, 206);
-    assert.equal(r.type, 'video/mp4');
-    assert.deepEqual([...r.raw], [2, 3, 4, 5]);
+    assert.deepEqual(r.raw, VIDEO.subarray(2, 6));
+    assert.equal(r.headers.get('content-range'), `bytes 2-5/${VIDEO.length}`);
 });
 
-test('troca de aplicacao: a nova nao serve o diretorio da anterior antes do .../path dela; encerrar zera o diretorio', async () => {
-    const outraDir = path.join(root, 'outra-app');
-    fs.mkdirSync(outraDir);
-    fs.writeFileSync(path.join(outraDir, 'b2.txt'), 'conteudo da outra');
-    try {
-        await mqtt.deliver(`aop/${SID}/currentApp`, 'app1b');
-        expect305(await files('path=a.txt', 'app1b'), 'a.txt da anterior, pela nova');
-        expect305(await files(undefined, 'app1b'), 'listagem da anterior, pela nova');
-        expect305(await files('path=a.txt'), 'app1 nao e mais a corrente');
-        // The directory of the new one arrives.
-        await mqtt.deliver(`aop/${SID}/app1b/path`, outraDir);
-        const b2 = await files('path=b2.txt', 'app1b');
-        assert.equal(b2.status, 200, b2.text);
-        assert.equal(b2.text, 'conteudo da outra');
-        expect305(await files('path=a.txt', 'app1b'), 'a.txt nao e da nova');
-        // A late .../path of the previous one does not apply to the new one.
-        await mqtt.deliver(`aop/${SID}/${APP}/path`, appDir);
-        expect305(await files('path=a.txt', 'app1b'), '.../path atrasado da anterior');
+test('listed file not received: 305', async () => {
+    await tune();
+    expectError(await files(APP_A, 'path=media/late.txt'), 305, 'not received');
+});
 
-        // Ending: an empty message on currentApp.
-        await mqtt.deliver(`aop/${SID}/currentApp`, '');
-        expect305(await files('path=b2.txt', 'app1b'), 'b2.txt depois de encerrar');
-        expect305(await files(undefined, 'app1b'), 'listagem depois de encerrar');
-        // The .../path of the ended one does not apply again.
-        await mqtt.deliver(`aop/${SID}/app1b/path`, outraDir);
-        expect305(await files('path=b2.txt', 'app1b'), '.../path da encerrada');
-        // The previous application back: a directory again only by its
-        // .../path.
-        await mqtt.deliver(`aop/${SID}/currentApp`, APP);
-        expect305(await files('path=a.txt'), 'app1 de volta, antes do .../path');
-        // And the .../path of the ended one does not become its directory (the
-        // handler left at the end).
-        await mqtt.deliver(`aop/${SID}/app1b/path`, outraDir);
-        expect305(await files('path=b2.txt'), '.../path da encerrada com a app1 corrente');
-    } finally {
-        // State of the following cases: app1 current, with its directory.
-        await mqtt.deliver(`aop/${SID}/currentApp`, APP);
-        await mqtt.deliver(`aop/${SID}/${APP}/path`, appDir);
+test('path outside the filesystem of the application: 305', async () => {
+    await tune();
+    for (const query of ['path=marca.txt', 'path=../marca.txt', 'path=nada', 'path=js/app.js/', 'path=a&path=b']) {
+        expectError(await files(APP_A, query), 305, query);
     }
-    const ok = await files('path=a.txt');
-    assert.equal(ok.status, 200, ok.text);
-    assert.equal(ok.text, 'conteudo a');
 });
 
-// Last: changes the service, and the directory of the new application has
-// not arrived yet.
-test('without a directory da aplicacao conhecido (core.app.url vazio): 305, sem ler relativo ao diretorio corrente do tv3ws', async () => {
-    await mqtt.deliver(TOPICS.current_service, '2');
-    await mqtt.deliver('aop/2/currentApp', 'app2');
-    // The cwd of npm test is tv3ws, which has package.json.
-    assert.ok(fs.existsSync(path.join(process.cwd(), 'package.json')));
-    const r = await files('path=package.json', 'app2');
-    expect305(r, 'package.json sem base');
-    assert.ok(!r.text.includes('"name"'), r.text);
-    expect305(await files(undefined, 'app2'), 'listagem sem base');
+test('appId: any of the BALD of the tuned service, with its own context; outside it, 305', async () => {
+    await tune();
+    const other = await files(APP_B);
+    assert.deepEqual(other.json, { files: [{ name: 'marca.txt', size: 3 }], dirs: [] });
+    expectError(await files(APP_B, 'path=marca.txt'), 305, 'marca.txt not received');
+    expectError(await files('urn:sbtvd:app:1002:nenhuma'), 305, 'appId outside the BALD');
+});
+
+test('package not received: listed without its parts', async () => {
+    await tune();
+    const files_ = received.get(contextLabel(CONTEXT_A))!;
+    const saved = files_.get('app.pkg')!;
+    files_.delete('app.pkg');
+    try {
+        const r = await files(APP_A);
+        assert.deepEqual(r.json.files.map((file: { name: string }) => file.name), ['app.pkg', 'aviso.txt']);
+        assert.deepEqual(r.json.dirs, [{ name: 'media' }]);
+    } finally {
+        files_.set('app.pkg', saved);
+    }
 });

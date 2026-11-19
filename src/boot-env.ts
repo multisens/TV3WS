@@ -14,6 +14,8 @@ const REQUIRED_ENV = [
     'LISTEN_ATTEMPTS',
     'MAX_REGISTRATIONS',
     'PING_INTERVAL_MS',
+    'OBJECT_PROXY_URL',
+    'APPS_DOMAIN',
 ];
 
 // Loads .env and stops the process if a required variable is missing; runs

@@ -7,11 +7,11 @@ export const TOPICS = {
     current_user: 'aop/currentUser',
     services: 'aop/services',
     current_service: 'aop/currentService',
-    current_app: 'aop/:serviceId/currentApp',
-    app_path: 'aop/:serviceId/:appId/path',
-    app_nodes: 'aop/:serviceId/:appId/doc/nodes',
     app_doc: 'aop/:serviceId/:appId/doc',
     devices: 'aop/devices',
+    tuned: 'tlm/tuned',
+    bald: 'tlm/sls/:serviceId/bald',
+    stsid: 'tlm/sls/:serviceId/stsid',
 };
 
 export function createFakeMqtt() {

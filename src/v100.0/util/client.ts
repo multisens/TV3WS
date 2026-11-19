@@ -15,11 +15,11 @@ export type LocalClient = {
 // stand-alone one, the clientid set by the edge. Responds error 107 if the
 // request does not come from a local client or no associated application
 // is running
-export function identifyLocalClient(req: Request, res: Response, next: NextFunction): void {
+export async function identifyLocalClient(req: Request, res: Response, next: NextFunction): Promise<void> {
     const clientType = req.get(CLIENT_CLASS_HEADER);
 
     if (clientType === 'associated') {
-        const clientId = currentAssociatedId();
+        const clientId = await currentAssociatedId();
         if (clientId === undefined) {
             returnError(res, 107, 'no associated application running');
             return;
