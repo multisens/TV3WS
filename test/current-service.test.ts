@@ -1,7 +1,6 @@
-// GET /tv3/current-service (C.6.3.1, Table C.8) through the whole app.ts,
-// with the real core and Redis and MQTT by doubles: 300 when there is no
-// service in use, "serviceId" omitted without an SLT, and aop/services
-// consumed.
+// GET /tv3/current-service (ABNT NBR 25608, C.6.3.1, Table C.8) through the
+// whole app.ts, with the real core and Redis and MQTT by doubles: 300 when
+// there is no service in use, and "serviceId" omitted without an SLT.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -63,33 +62,13 @@ test('servico em uso sem @serviceId conhecido: 200, sem "serviceId" (nem "-1"/"u
     assert.ok(!('serviceName' in r.json), 'nome vazio e omitido (C.3.2.2)');
 });
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const core = require('../src/core').default;
-
-test('aop/services: a lista dos servicos anunciados pelo serviceContextId; o servico em uso segue sem "serviceId" e "serviceName"', async () => {
-    await mqtt.deliver(TOPICS.current_service, '');
-    await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceContextId: 'urn:tv30:service:outro' }]));
-    assert.deepEqual(core.services, [{ serviceContextId: SVC }, { serviceContextId: 'urn:tv30:service:outro' }]);
+test('version 100.0: the service in use follows without "serviceId" and "serviceName"', async () => {
     await mqtt.deliver(TOPICS.current_service, SVC);
     const r = await get({ 'X-TV30-API-Version': '100.0' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.apiVersion, '100.0');
     assert.equal(r.json.serviceContextId, SVC);
     assert.ok(!('serviceId' in r.json) && !('serviceName' in r.json), JSON.stringify(r.json));
-
-    // Empty message (retained deleted): no service; an item out of format is
-    // left out.
-    await mqtt.deliver(TOPICS.services, '');
-    assert.deepEqual(core.services, []);
-    await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceId: 7 }, 'x', null]));
-    assert.deepEqual(core.services, [{ serviceContextId: SVC }]);
-    // Invalid JSON: logs and keeps the list.
-    const [errorOrig, logOrig] = [console.error, console.log];
-    console.error = console.log = () => undefined;
-    try {
-        await mqtt.deliver(TOPICS.services, 'nao e json');
-    } finally { [console.error, console.log] = [errorOrig, logOrig]; }
-    assert.deepEqual(core.services, [{ serviceContextId: SVC }]);
     await mqtt.deliver(TOPICS.current_service, '');
 });
 
@@ -113,7 +92,6 @@ test('a plataforma desfaz a selecao (aop/currentService vazio): volta o 300', as
 test('session:current-service pela funcao: cinco campos, serviceId e serviceName vazios (sem SLT)', async () => {
     const tick = () => new Promise(r => setImmediate(r));
     await mqtt.deliver(TOPICS.current_service, '');
-    await mqtt.deliver(TOPICS.services, JSON.stringify([{ serviceContextId: SVC }, { serviceContextId: 'urn:tv30:service:outro' }]));
     for (const sid of [SVC, 'urn:tv30:service:outro', 'urn:tv30:service:fora-da-lista']) {
         fake.fcalls.length = 0;
         await mqtt.deliver(TOPICS.current_service, sid);

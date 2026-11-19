@@ -1,4 +1,5 @@
-// Remote device communication APIs, version 100.0 (proposal v2 of C.6.15),
+// Remote device communication APIs, version 100.0 (ABNT NBR 25608, C.6.15
+// (proposal v2)),
 // through the whole app.ts and the entry server, with redis-client and
 // mqtt-client replaced by test doubles.
 import { test, before, after, beforeEach } from 'node:test';
@@ -633,7 +634,7 @@ test('eventos remote-device: filtro classId; recusa e transferência não geram 
     await closeCode(preempted);
     await new Promise((resolve) => setTimeout(resolve, 30));
 
-    assert.deepEqual(filtered.map((e: any) => e.eventType), ['available', 'pairFormed']);
+    assert.deepEqual(filtered.map((e) => (e as { eventType?: string }).eventType), ['available', 'pairFormed']);
     assert.equal(elsewhere.length, 0);
 });
 
@@ -719,7 +720,7 @@ test('fim da aplicacao associada (C.4.4): par encerrado com deviceUnavailable, p
     assert.equal(registry.isPaired(), false);
     assert.equal(await closeCode(client), 4002);
     assert.deepEqual(clientInbox.at(-1), { event: 'pairEnded', reason: 'deviceUnavailable' });
-    await waitFor(() => deviceInbox.some((m: any) => m.event === 'pairEnded'));
+    await waitFor(() => deviceInbox.some((m) => (m as { event?: string }).event === 'pairEnded'));
     assert.equal(await connect(url), 404, 'ponto de entrada local removido');
     await closeCode(listenerWs);
     assert.equal(await connect(listener.url), 404, 'ouvinte removido');
@@ -750,7 +751,7 @@ test('bloqueio do cliente (C.4.2.2, C.4.4): registros que ele fez removidos; par
     await mqtt.deliver('aop/access-panel/client-blocked', 'cliente-1');
     assert.equal(registry.isPaired(), false);
     assert.equal(await closeCode(client), 4002);
-    await waitFor(() => deviceInbox.some((m: any) => m.event === 'pairEnded'));
+    await waitFor(() => deviceInbox.some((m) => (m as { event?: string }).event === 'pairEnded'));
     assert.equal(await connect(url), 404, 'ponto de entrada local do bloqueado removido');
     assert.ok(registries.getRegistryByHandle(handle), 'o registro de outro cliente continua');
 

@@ -5,7 +5,6 @@ type Handler = (m: string, t?: string) => void | Promise<void>;
 
 export const TOPICS = {
     current_user: 'aop/currentUser',
-    services: 'aop/services',
     current_service: 'aop/currentService',
     app_doc: 'aop/:serviceId/:appId/doc',
     devices: 'aop/devices',
@@ -19,12 +18,20 @@ export function createFakeMqtt() {
     const published: [string, string][] = [];
 
     const mqttClient = {
-        addTopicHandler(t: string, f: Handler) { handlers.set(t, [...(handlers.get(t) ?? []), f]); },
-        removeTopicHandler(t: string, f: Handler) {
-            const list = (handlers.get(t) ?? []).filter(h => h !== f);
-            if (list.length > 0) handlers.set(t, list); else handlers.delete(t);
+        addTopicHandler(t: string, f: Handler): void {
+            handlers.set(t, [...(handlers.get(t) ?? []), f]);
         },
-        publish(t: string, m: string) { published.push([t, m]); },
+        removeTopicHandler(t: string, f: Handler): void {
+            const list = (handlers.get(t) ?? []).filter((h) => h !== f);
+            if (list.length > 0) {
+                handlers.set(t, list);
+            } else {
+                handlers.delete(t);
+            }
+        },
+        publish(t: string, m: string): void {
+            published.push([t, m]);
+        },
         parseTopic(topic: string, params: Record<string, string>) {
             return topic.split('/').map(p => (p.startsWith(':') && p.substring(1) in params ? params[p.substring(1)] : p)).join('/');
         },
@@ -33,11 +40,15 @@ export function createFakeMqtt() {
         on() { /* no broker */ },
         subscribe() { /* no broker */ },
         unsubscribe() { /* no broker */ },
-        publish(t: string, m: string) { published.push([t, m]); },
+        publish(t: string, m: string): void {
+            published.push([t, m]);
+        },
     };
 
     async function deliver(topic: string, message: string): Promise<void> {
-        for (const h of handlers.get(topic) ?? []) await h(message, topic);
+        for (const h of handlers.get(topic) ?? []) {
+            await h(message, topic);
+        }
     }
 
     return { mqttClient, client, handlers, published, deliver };

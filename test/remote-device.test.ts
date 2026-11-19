@@ -1,8 +1,9 @@
-// Registration and removal of a remote device (C.6.15.2, C.6.15.3) with
-// Redis, core and MQTT by doubles. With Redis down, 404 {error:200} with no
-// port open and no half registration; deregistration closes the ports; a
-// drawn port in use draws another. Scheme of the entry points: wss:// for
-// the remote device, with the receiver certificate; ws:// for the local one.
+// Registration and removal of a remote device (ABNT NBR 25608, C.6.15.2 and
+// C.6.15.3) with Redis, core and MQTT by doubles. With Redis down, 404
+// {error:200} with no port open and no half registration; deregistration
+// closes the ports; a drawn port in use draws another. Scheme of the entry
+// points: wss:// for the remote device, with the receiver certificate; ws://
+// for the local one.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -41,10 +42,16 @@ const topicHandlers = new Map<string, ((m: string) => void)[]>();
 const deliver = (topic: string, message: string) => (topicHandlers.get(topic) ?? []).forEach(h => h(message));
 stub('mqtt-client', {
     default: {
-        publish(t: string, m: string) { published.push([t, m]); },
-        addTopicHandler(t: string, f: (m: string) => void) { topicHandlers.set(t, [...(topicHandlers.get(t) ?? []), f]); },
+        publish(t: string, m: string): void {
+            published.push([t, m]);
+        },
+        addTopicHandler(t: string, f: (m: string) => void): void {
+            topicHandlers.set(t, [...(topicHandlers.get(t) ?? []), f]);
+        },
         removeTopicHandler() { /* nothing */ },
-        parseTopic(t: string) { return t; },
+        parseTopic(t: string): string {
+            return t;
+        },
     },
     TOPICS: { devices: 'aop/devices', app_doc: 'aop/:serviceId/:appId/doc' },
 });
@@ -66,7 +73,10 @@ const tls = require('../src/tls') as typeof import('../src/tls');
 // that EADDRINUSE happens the same way on Windows and Linux.
 async function occupy(port = 0): Promise<net.Server> {
     const s = net.createServer();
-    await new Promise<void>((resolve, reject) => { s.once('error', reject); s.listen(port, () => resolve()); });
+    await new Promise<void>((resolve, reject) => {
+        s.once('error', reject);
+        s.listen(port, () => resolve());
+    });
     return s;
 }
 const portOf = (s: net.Server) => (s.address() as AddressInfo).port;
@@ -82,14 +92,22 @@ async function freePortPair(): Promise<number> {
     for (let i = 0; i < 20; i++) {
         const p = await freePort();
         // P+1 in use: try another.
-        try { await release(await occupy(p + 1)); return p; } catch { }
+        try {
+            await release(await occupy(p + 1));
+            return p;
+        } catch {
+            continue;
+        }
     }
     throw new Error('sem par de portas livres');
 }
 function listening(port: number): Promise<boolean> {
     return new Promise(resolve => {
         const c = net.connect(port, '127.0.0.1');
-        c.once('connect', () => { c.destroy(); resolve(true); });
+        c.once('connect', () => {
+            c.destroy();
+            resolve(true);
+        });
         c.once('error', () => resolve(false));
     });
 }
@@ -113,7 +131,9 @@ before(async () => {
     app.use('/tv3/remote-device', remoteDeviceAPI);
     app.use('/tv3', apiNotFound);
     app.use(errorHandler);
-    server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    server = await new Promise<Server>((resolve) => {
+        const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
     root = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -131,7 +151,7 @@ async function call(method: string, route: string, body?: unknown, headers: Reco
     const text = await res.text();
     return { status: res.status, json: text ? JSON.parse(text) : undefined };
 }
-const expectError = (r: { status: number; json: any }, code: number) => {
+const expectError = (r: { status: number; json?: { error?: number } }, code: number): void => {
     assert.equal(r.status, 404);
     assert.equal(r.json?.error, code, JSON.stringify(r.json));
 };
@@ -145,7 +165,9 @@ test('Redis fora do ar no registro: 404 {error:200}, sem porta aberta, sem regis
     fake.setDown(true);
     try {
         expectError(await call('POST', '/', BODY), 200);
-    } finally { fake.setDown(false); }
+    } finally {
+        fake.setDown(false);
+    }
     assert.equal(await listening(wsPort), false, 'porta do WebSocket nao deve ficar aberta');
     assert.equal(manager.getDevicesByClass('teste').length, 0);
     assert.equal(store.has('remote-devices:index'), false);
@@ -165,7 +187,9 @@ test('registro com Redis normal; remocao que falha mantem o dispositivo; depois 
     fake.setDown(true);
     try {
         expectError(await call('DELETE', `/${handle}`), 200);
-    } finally { fake.setDown(false); }
+    } finally {
+        fake.setDown(false);
+    }
     assert.ok(manager.getDeviceByHandle(handle), 'dispositivo continua registrado');
     assert.ok((store.get('remote-devices:index') as Set<string>).has(handle));
     assert.equal(await listening(wsPort), true, 'remocao que falhou nao fecha a porta');
@@ -317,12 +341,19 @@ function connects(url: string, ca?: Buffer): Promise<WebSocket> {
     });
 }
 const closed = (ws: WebSocket) => new Promise<void>(resolve => {
-    if (ws.readyState === WebSocket.CLOSED) resolve(); else ws.once('close', () => resolve());
+    if (ws.readyState === WebSocket.CLOSED) {
+        resolve();
+    } else {
+        ws.once('close', () => resolve());
+    }
 });
 
 test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de entrada local em ws:// (C.6.15.5)', async (t) => {
     const dir = selfSignedCert();
-    if (!dir) { t.skip('openssl indisponivel para gerar o certificado de teste'); return; }
+    if (!dir) {
+        t.skip('openssl indisponivel para gerar o certificado de teste');
+        return;
+    }
     const saved = { dir: process.env.TV30_TLS_DIR, flag: process.env.TV3WS_WS_TLS };
     process.env.TV30_TLS_DIR = dir;
     delete process.env.TV3WS_WS_TLS;
@@ -356,7 +387,11 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
         assert.equal(plain.json.url, `ws://localhost:${devPort}`);
         assert.equal((await call('DELETE', `/${plain.json.handle}`)).status, 200);
     } finally {
-        if (saved.dir === undefined) delete process.env.TV30_TLS_DIR; else process.env.TV30_TLS_DIR = saved.dir;
+        if (saved.dir === undefined) {
+            delete process.env.TV30_TLS_DIR;
+        } else {
+            process.env.TV30_TLS_DIR = saved.dir;
+        }
         process.env.TV3WS_WS_TLS = saved.flag ?? 'false';
         tls._resetTlsCache();
         fs.rmSync(dir, { recursive: true, force: true });
@@ -366,7 +401,9 @@ test('com o certificado do receptor: registro em wss:// (C.6.15.2); ponto de ent
 after(async () => {
     // Devices left by a failed test: deregistration closes the ports and the
     // process can exit.
-    for (const d of manager.getDevicesByClass('teste')) await manager.removeRemoteDevice(d.getHandle());
+    for (const d of manager.getDevicesByClass('teste')) {
+        await manager.removeRemoteDevice(d.getHandle());
+    }
 });
 
 test('C.6.15.2 (2.0): corpo que nao e objeto JSON da 101; campo ausente 105; valor invalido 101; supportedTypes vazio aceito', async () => {
