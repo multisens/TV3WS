@@ -57,11 +57,11 @@ const manager = require('../src/modules/auth-manager/manager') as typeof import(
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
+const { _layerForTests } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
 // The QR code or PIN on screen makes the next /tv3/authorize get 103, and
 // several cases here leave the pairing open: each case starts with the layer
 // free (the 103 cases are in pairing-popup.test.ts).
-beforeEach(() => _camadaParaTestes.limpar());
+beforeEach(() => _layerForTests.clear());
 
 // --- server ------------------------------------------------------------------
 let server: Server;
@@ -412,7 +412,7 @@ for (const pm of ['qrcode', 'kex'] as const) {
 
         // Layer free, as at the end of the lock: the pending attempt does not
         // give 101.
-        _camadaParaTestes.limpar();
+        _layerForTests.clear();
         let p2: NonLocal | undefined;
         assert.equal(await popUpsDuring(async () => { p2 = await pairNonLocal(pm, p.cid); }), 1);
         notStored(p.cid);
@@ -454,7 +454,7 @@ test('nao local: a recusa no pop-up grava clients:blocked na hora; o reuso da 10
 
 test('nao local com tentativa pendente: o novo pedido recusado no pop-up bloqueia, e o desafio anterior da 102', async () => {
     const p = await pairNonLocal('qrcode');
-    _camadaParaTestes.limpar();
+    _layerForTests.clear();
     viewerAnswer = false;
     expectError(await authorize(p.cid, { pm: 'qrcode' }), 102);
     viewerAnswer = true;
@@ -674,7 +674,7 @@ test('challenge-response com bytes diferentes que dao o mesmo texto UTF-8: 102; 
     for (let tries = 0; tries < 40 && i < 0; tries++) {
         // Each attempt leaves the QR code of the previous one on screen (103):
         // frees the layer for the next.
-        _camadaParaTestes.limpar();
+        _layerForTests.clear();
         p = await pairNonLocal('qrcode');
         i = sha(p.plain).findIndex(b => b >= 0xf8);
     }

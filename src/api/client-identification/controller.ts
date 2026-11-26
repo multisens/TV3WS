@@ -1,13 +1,11 @@
-import * as dotenv from 'dotenv';
 import { Request, Response } from 'express';
 import logger from '../../logger';
 import * as manager from '../../modules/auth-manager/manager';
 import Client, { ClientClass, PairingMaterial } from '../../modules/auth-manager/client';
 import redis from '../../redis-client';
-import service, { pairingMethods, Reserva } from './service';
+import service, { pairingMethods, Reservation } from './service';
 import { returnError, aes128ECBEncrypt, base64UrlDecode, base64UrlEncode, aes128ECBDecrypt } from '../../util';
 import { serverCert } from '../../tls';
-dotenv.config();
 
 type TokenResponse = {
     accessToken: string;
@@ -32,6 +30,10 @@ type AuthorizeParams = {
 // challenge-response, the pairing material already taken from it.
 type ValidToken = { client: Client; pairing?: PairingMaterial };
 
+// Origins of the running associated applications, with the service context
+// of each.
+const ASSOCIATED_ORIGINS_KEY = 'origins:associated';
+
 async function GETAuthorize(req: Request, res: Response): Promise<void> {
     logger.debug('Received call to /authorize');
 
@@ -51,11 +53,11 @@ async function GETAuthorize(req: Request, res: Response): Promise<void> {
 
     // The reservation of the graphics layer is released at the end of the
     // request, unless it passed to the pairing pop-up.
-    const reservation: { r?: Reserva } = {};
+    const reservation: { r?: Reservation } = {};
     try {
         await authorizeReserved(res, params, clientClass, reservation);
     } finally {
-        service.liberarReserva(reservation.r);
+        service.releaseReservation(reservation.r);
     }
 }
 
@@ -162,7 +164,7 @@ async function GETToken(req: Request, res: Response): Promise<void> {
 
 // The rest of /tv3/authorize, with the graphics layer reserved (or 103).
 async function authorizeReserved(res: Response, params: AuthorizeParams, clientClass: ClientClass,
-                                 reservation: { r?: Reserva }): Promise<void> {
+                                 reservation: { r?: Reservation }): Promise<void> {
     const client = await checkAuthorization(params, clientClass, res, reservation);
     logger.debug(`GETAuthorize received authorized = ${client !== undefined}`);
     if (client === undefined) {
@@ -210,7 +212,7 @@ async function authorizeReserved(res: Response, params: AuthorizeParams, clientC
 // the authorized client (a non-local one still pending) or undefined, with
 // the error already answered.
 async function checkAuthorization(params: AuthorizeParams, clientClass: ClientClass, res: Response,
-                                  reservation: { r?: Reserva }): Promise<Client | undefined> {
+                                  reservation: { r?: Reservation }): Promise<Client | undefined> {
     const clientId = params.clientId;
     const status = await manager.clientIdStatus(clientId);
     if (status === 'used') {
@@ -228,7 +230,7 @@ async function checkAuthorization(params: AuthorizeParams, clientClass: ClientCl
     // 103 with the graphics layer busy (C.4.2.3, Table C.3), only for a request
     // that would reach the pop-up. No await between the reservation and the
     // publication of the yes/no: two requests do not reserve together.
-    reservation.r = service.reservarCamada(clientId);
+    reservation.r = service.reserveLayer(clientId);
     if (!reservation.r) {
         returnError(res, 103, 'another authorization or pairing pop-up is on screen; try again later.');
         return undefined;
@@ -259,7 +261,7 @@ async function classifyClient(req: Request, pm: string | undefined): Promise<Cli
 
     const origin = req.get('Origin');
     if (origin) {
-        const scid = await redis.hget('origins:associated', origin);
+        const scid = await redis.hget(ASSOCIATED_ORIGINS_KEY, origin);
         if (scid !== null) {
             return 'associated';
         }

@@ -58,7 +58,7 @@ stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqttClientRaw })
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const router = require('../src/api/client-identification').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { PAIRING_POPUP_TIMEOUT_MS, _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
+const { PAIRING_POPUP_TIMEOUT_MS, _layerForTests } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const manager = require('../src/modules/auth-manager/manager') as typeof import('../src/modules/auth-manager/manager');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -79,8 +79,8 @@ after(() => new Promise<void>(resolve => server.close(() => resolve())));
 // Each case starts with the graphics layer free, the real clock and the
 // viewer answering "yes".
 beforeEach(() => {
-    _camadaParaTestes.limpar();
-    _camadaParaTestes.relogio();
+    _layerForTests.clear();
+    _layerForTests.clock();
     respostaSimNao = 'true';
 });
 
@@ -227,7 +227,7 @@ test('103 com o PIN de B na tela; o reuso do clientid de A, pareado, segue dando
     assert.deepEqual(on(`${YESNO}/message`, from), []);
     assert.equal((await token(b.cid, challengeResponse(b))).status, 200);
     assert.deepEqual(on(PIN, from), [CLOSE]);
-    assert.equal(_camadaParaTestes.ocupacao(), undefined, 'camada livre depois do sucesso');
+    assert.equal(_layerForTests.reservation(), undefined, 'camada livre depois do sucesso');
 });
 
 test('PIN de A na tela: novo /tv3/authorize de A descarta a tentativa pendente e recebe 103, sem sim/nao; o desafio anterior da 102', async () => {
@@ -240,7 +240,7 @@ test('PIN de A na tela: novo /tv3/authorize de A descarta a tentativa pendente e
 
 test('depois da trava, novo /tv3/authorize de A sem pareamento concluido abre o sim/nao e um QR code novo; o desafio anterior da 102', async () => {
     let agora = Date.now();
-    _camadaParaTestes.relogio(() => agora);
+    _layerForTests.clock(() => agora);
     const a = await authorize('qrcode');
     agora += PAIRING_POPUP_TIMEOUT_MS;
     const from = published.length;
@@ -290,7 +290,7 @@ test('103 com o sim/nao de um pedido esperando resposta: outro cliente e o MESMO
     // The 103 of the second request with the same clientid did not release
     // the reservation of the first one nor spoil its authorization; the layer
     // is free.
-    assert.equal(_camadaParaTestes.ocupacao(), undefined);
+    assert.equal(_layerForTests.reservation(), undefined);
     respostaSimNao = 'true';
     assert.equal((await authorizeRaw(novoLocal())).status, 200);
 });
@@ -298,7 +298,7 @@ test('103 com o sim/nao de um pedido esperando resposta: outro cliente e o MESMO
 test('a recusa no sim/nao libera a camada', async () => {
     respostaSimNao = 'false';
     expectError(await authorizeRaw(novoLocal()), 102);
-    assert.equal(_camadaParaTestes.ocupacao(), undefined);
+    assert.equal(_layerForTests.reservation(), undefined);
     respostaSimNao = 'true';
     assert.equal((await authorizeRaw(novoLocal())).status, 200);
 });
@@ -314,13 +314,13 @@ test('erro depois da reserva (gravacao recusada pela funcao do Redis) libera a c
         fake.recusar('tv30_client_authorize');
         console.error = errorOrig;
     }
-    assert.equal(_camadaParaTestes.ocupacao(), undefined);
+    assert.equal(_layerForTests.reservation(), undefined);
     assert.equal((await authorizeRaw(novoLocal())).status, 200);
 });
 
 test('a trava de 120 s libera a camada e encerra a tentativa de A; o desafio tardio de A da 102 e nao fecha o QR code de B', async () => {
     let agora = Date.now();
-    _camadaParaTestes.relogio(() => agora);
+    _layerForTests.clock(() => agora);
     const a = await authorize('qrcode');
     expectError(await authorizeRaw(novoNaoLocal()), 103);
     // The graphics layer closed the QR code of A.
@@ -338,7 +338,7 @@ test('a trava de 120 s libera a camada e encerra a tentativa de A; o desafio tar
 
 test('dentro da trava, o desafio errado da 102 e pode ser respondido de novo; um instante antes do fim, o certo conclui', async () => {
     let agora = Date.now();
-    _camadaParaTestes.relogio(() => agora);
+    _layerForTests.clock(() => agora);
     const a = await authorize('kex');
     expectError(await token(a.cid, 'AAAAAAAAAAAAAAAAAAAAAA'), 102);
     expectError(await token(a.cid, 'AAAAAAAAAAAAAAAAAAAAAA'), 102);
@@ -348,7 +348,7 @@ test('dentro da trava, o desafio errado da 102 e pode ser respondido de novo; um
 
 test('sem outro pedido depois da trava, o desafio certo de A da 102', async () => {
     let agora = Date.now();
-    _camadaParaTestes.relogio(() => agora);
+    _layerForTests.clock(() => agora);
     const a = await authorize('kex');
     agora += PAIRING_POPUP_TIMEOUT_MS;
     expectError(await token(a.cid, challengeResponse(a)), 102);

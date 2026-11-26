@@ -4,14 +4,18 @@ import * as core from '../../core';
 import logger from '../../logger';
 import { base64UrlEncode, base64UrlDecode, sha256Encrypt, aes128ECBEncrypt, createECDHKeys } from '../../util';
 
+type PairingPopUp = 'qrcode' | 'pin';
+
+// Reservation of the graphics layer: the pop-up that holds it, the request
+// that owns it and the instant it ends.
+export type Reservation = { kind: 'yesno' | PairingPopUp; owner: string; until: number };
+
 export const pairingMethods: string[] = ['qrcode', 'kex'];
 
 // Lock of the QR code and PIN pop-ups: they stay on screen until the
 // /tv3/token that checks the challenge (C.4.3.2, C.4.3.3) or until this time
 // expires; the pending attempt ends with them.
 export const PAIRING_POPUP_TIMEOUT_MS = 120 * 1000;
-
-type PairingPopUp = 'qrcode' | 'pin';
 
 // Graphics layer: one authorization pop-up at a time. With a yes/no waiting
 // for an answer, or the QR code or PIN of a pairing on screen, a new
@@ -22,49 +26,52 @@ type PairingPopUp = 'qrcode' | 'pin';
 // is released at the end of /tv3/authorize, on the success of the pairing or
 // at the end of the lock; memory only.
 export const YESNO_TIMEOUT_MS = 10 * 1000;
+
 // Redis writing between the answer to the yes/no and the end of the request
 // (each command gives up after 1.5 s).
-const YESNO_FOLGA_MS = 5 * 1000;
+const YESNO_MARGIN_MS = 5 * 1000;
 
-export type Reserva = { tipo: 'yesno' | PairingPopUp; dono: string; ate: number };
-let ocupacao: Reserva | undefined;
-let agora: () => number = Date.now;
+const SYMMETRIC_KEY_BYTES = 32;
+const SECRET_BYTES = 16;
+const CHALLENGE_BYTES = 16;
+const PIN_MODULUS = BigInt(10000);
+const PIN_DIGITS = 4;
 
-function camadaOcupada(): Reserva | undefined {
-    if (ocupacao && ocupacao.ate <= agora()) ocupacao = undefined;
-    return ocupacao;
-}
+let layerReservation: Reservation | undefined;
+let now: () => number = Date.now;
+
+export const _layerForTests = {
+    clock(f?: () => number): void {
+        now = f ?? Date.now;
+    },
+    clear(): void {
+        layerReservation = undefined;
+    },
+    reservation(): Reservation | undefined {
+        return currentReservation();
+    },
+};
 
 // Reserves the layer for the yes/no of the request; undefined if it is busy.
-function reservarCamada(clientId: string): Reserva | undefined {
-    const atual = camadaOcupada();
-    if (atual) {
-        logger.info(`Camada grafica ocupada (${atual.tipo} do cliente ${atual.dono}): /tv3/authorize do cliente ${clientId} recebe 103`);
+function reserveLayer(clientId: string): Reservation | undefined {
+    const current = currentReservation();
+    if (current !== undefined) {
+        logger.info(`Graphics layer busy (${current.kind} of client ${current.owner}): /tv3/authorize of client ${clientId} gets 103`);
         return undefined;
     }
-    ocupacao = { tipo: 'yesno', dono: clientId, ate: agora() + YESNO_TIMEOUT_MS + YESNO_FOLGA_MS };
-    return ocupacao;
+    layerReservation = { kind: 'yesno', owner: clientId, until: now() + YESNO_TIMEOUT_MS + YESNO_MARGIN_MS };
+    return layerReservation;
 }
 
 // End of the request (local client served, refusal, error): releases its
 // reservation if it is still the one of the yes/no. If it already passed to
 // the pairing pop-up, or the layer belongs to another request, nothing
 // changes.
-function liberarReserva(r: Reserva | undefined): void {
-    if (r !== undefined && ocupacao === r) ocupacao = undefined;
+function releaseReservation(reservation: Reservation | undefined): void {
+    if (reservation !== undefined && layerReservation === reservation) {
+        layerReservation = undefined;
+    }
 }
-
-// The pairing pop-up takes the layer (the yes/no reservation of this
-// request leaves without a gap) until success or the end of the lock.
-function ocuparComPareamento(tipo: PairingPopUp, clientId: string): void {
-    ocupacao = { tipo, dono: clientId, ate: agora() + PAIRING_POPUP_TIMEOUT_MS };
-}
-
-export const _camadaParaTestes = {
-    relogio(f?: () => number): void { agora = f ?? Date.now; },
-    limpar(): void { ocupacao = undefined; },
-    ocupacao(): Reserva | undefined { return camadaOcupada(); },
-};
 
 async function askAuthorization(displayName: string): Promise<boolean> {
     const message = `A aplicação "${displayName}" deseja acessar as informações do sinal de TV Digital.\nVocê deseja autorizar isto?`;
@@ -74,22 +81,14 @@ async function askAuthorization(displayName: string): Promise<boolean> {
 }
 
 function generateQRCodeSecret(client: Client): Buffer<ArrayBufferLike> {
-    const simm_key = crypto.randomBytes(32);
-    
-    const base64Key = base64UrlEncode(simm_key);
-    ocuparComPareamento('qrcode', client.getId());
+    const symmetricKey = crypto.randomBytes(SYMMETRIC_KEY_BYTES);
+    const base64Key = base64UrlEncode(symmetricKey);
+    holdForPairing('qrcode', client.getId());
     core.showQRCodePopUp(base64Key, PAIRING_POPUP_TIMEOUT_MS);
 
-    const secret = sha256Encrypt(simm_key).subarray(0, 16);
+    const secret = sha256Encrypt(symmetricKey).subarray(0, SECRET_BYTES);
     client.setSecret(secret);
     return secret;
-}
-
-// C.4.3.3, step 2 and note: the PIN is the remainder of the hash by 10 000,
-// "a four-digit number", with leading zeros.
-export function pinFromHash(hash: Buffer): string {
-    const pin = BigInt('0x' + hash.toString('hex')) % BigInt(10000);
-    return pin.toString().padStart(4, '0');
 }
 
 function generatePINSecret(client: Client, key: string): Buffer<ArrayBufferLike> {
@@ -97,47 +96,79 @@ function generatePINSecret(client: Client, key: string): Buffer<ArrayBufferLike>
     client.setECDHKeys(privateKey, publicKey);
 
     const clientKey = base64UrlDecode(key);
-    let simm_key = privateKey.computeSecret(clientKey);
-    simm_key = sha256Encrypt(simm_key);
-    
-    ocuparComPareamento('pin', client.getId());
-    core.showPINPopUp(pinFromHash(simm_key), PAIRING_POPUP_TIMEOUT_MS);
+    const sharedSecret = privateKey.computeSecret(clientKey);
+    const symmetricKey = sha256Encrypt(sharedSecret);
+    holdForPairing('pin', client.getId());
+    core.showPINPopUp(pinFromHash(symmetricKey), PAIRING_POPUP_TIMEOUT_MS);
 
-    const secret = simm_key.subarray(0, 16);
+    const secret = symmetricKey.subarray(0, SECRET_BYTES);
     client.setSecret(secret);
     return secret;
 }
 
-function generateChallenge(client: Client, secret: Buffer<ArrayBufferLike>) {
-    const randomString = crypto.randomBytes(16);
+function generateChallenge(client: Client, secret: Buffer<ArrayBufferLike>): string {
+    const randomString = crypto.randomBytes(CHALLENGE_BYTES);
     // Keeps the SHA-256 as bytes: a UTF-8 .toString() would lose information.
     client.setChallenge(sha256Encrypt(randomString));
 
     const encrypted = aes128ECBEncrypt(randomString, secret);
-
     return base64UrlEncode(encrypted);
 }
 
 // True while the QR code or PIN pop-up of the client holds the layer: the
 // pending attempt of the client is valid only until the end of the lock.
 function pairingOpen(clientId: string): boolean {
-    const o = camadaOcupada();
-    return o !== undefined && o.tipo !== 'yesno' && o.dono === clientId;
+    const reservation = currentReservation();
+    return reservation !== undefined && reservation.kind !== 'yesno' && reservation.owner === clientId;
 }
 
 // Closes the pairing pop-up of the client, if it is still its own, and
 // releases the layer. A failure is only logged.
 function endPairing(clientId: string): void {
     try {
-        const o = camadaOcupada();
-        if (o && o.tipo !== 'yesno' && o.dono === clientId) {
-            ocupacao = undefined;
-            if (o.tipo === 'qrcode') core.closeQRCodePopUp();
-            else core.closePINPopUp();
+        const reservation = currentReservation();
+        if (reservation === undefined || reservation.kind === 'yesno' || reservation.owner !== clientId) {
+            return;
+        }
+        layerReservation = undefined;
+        if (reservation.kind === 'qrcode') {
+            core.closeQRCodePopUp();
+        } else {
+            core.closePINPopUp();
         }
     } catch (err) {
         logger.error(`Failed to close the pairing popup of client ${clientId}: ${(err as Error)?.message}`);
     }
 }
 
-export default { askAuthorization, generateQRCodeSecret, generatePINSecret, generateChallenge, pairingOpen, endPairing, reservarCamada, liberarReserva }
+// C.4.3.3, step 2 and note: the PIN is the remainder of the hash by 10 000,
+// "a four-digit number", with leading zeros.
+export function pinFromHash(hash: Buffer): string {
+    const pin = BigInt('0x' + hash.toString('hex')) % PIN_MODULUS;
+    return pin.toString().padStart(PIN_DIGITS, '0');
+}
+
+// The reservation in force; an expired one is dropped.
+function currentReservation(): Reservation | undefined {
+    if (layerReservation !== undefined && layerReservation.until <= now()) {
+        layerReservation = undefined;
+    }
+    return layerReservation;
+}
+
+// The pairing pop-up takes the layer (the yes/no reservation of this
+// request leaves without a gap) until success or the end of the lock.
+function holdForPairing(kind: PairingPopUp, clientId: string): void {
+    layerReservation = { kind, owner: clientId, until: now() + PAIRING_POPUP_TIMEOUT_MS };
+}
+
+export default {
+    askAuthorization,
+    generateQRCodeSecret,
+    generatePINSecret,
+    generateChallenge,
+    pairingOpen,
+    endPairing,
+    reserveLayer,
+    releaseReservation,
+};
