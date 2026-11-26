@@ -1,4 +1,5 @@
 import * as dotenv from 'dotenv';
+import logger from '../../logger';
 import mqttClient, { TOPICS } from '../../mqtt-client';
 import redis from '../../redis-client';
 import * as redisFunctions from '../../redis-functions';
@@ -6,6 +7,34 @@ import { ApiError, execOrThrow } from '../../util';
 import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
+export type AttributeResult =
+    | { kind: 'text'; value: string }
+    | { kind: 'json'; attrs: Record<string, string> };
+
+// C.6.14.6: whether the file is the avatar of a profile visible to the
+// service ('granted'); only of profiles not visible: 'no-consent' (405,
+// Table C.75); of no profile: 'no-owner' (305). The service checked is the
+// current one (session:current-service-id), not the <service-context-id> of
+// the URL.
+export type AvatarAccess = 'granted' | 'no-consent' | 'no-owner';
+
+type FileData = { size: number; mime: string; name: string; file: string };
+
+// Basic attributes a broadcaster may not redefine.
+const PROTECTED_BASICS = ['id', 'nickname', 'parentalControl', 'maxContentRating'];
+
+// Quota of the private area per profile and service context (10.3.3: up to
+// 20 MB).
+const PRIVATE_AREA_QUOTA_BYTES = 20 * 1024 * 1024;
+
+const AVATAR_KEY_PREFIX = 'avatar:';
+
+// Table C.74, "Restrictions": "it is necessary to notify the user that the
+// application wants to change/add the attribute". An informative notice
+// after writing, without confirmation; not retained, so that an old notice
+// does not come back when the TV page reconnects.
+export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
+export const INFO_POPUP_TIMEOUT_MS = 5000;
 
 // The session is read from Redis on every call.
 
@@ -24,10 +53,14 @@ async function readCurrentService(): Promise<string> {
 // visible to it (user:{id}:consent).
 async function resolveActiveService(): Promise<string> {
     const currentService = await readCurrentService();
-    if (!currentService) return '';
+    if (!currentService) {
+        return '';
+    }
 
     const userIds = await redis.smembers('users:index');
-    if (userIds.length === 0) return currentService;
+    if (userIds.length === 0) {
+        return currentService;
+    }
 
     const pipeline = redis.pipeline();
     userIds.forEach(id => pipeline.sismember(`user:${id}:consent`, currentService));
@@ -36,7 +69,6 @@ async function resolveActiveService(): Promise<string> {
     const known = results.some(r => r === 1);
     return known ? currentService : '';
 }
-
 
 // The session mirrors the topics; a value outside the schema is refused, and
 // the MQTT handler logs it.
@@ -48,21 +80,24 @@ async function updateCurrentService(m: string): Promise<void> {
     await redisFunctions.sessionServiceId(m);
 }
 
-mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
-mqttClient.addTopicHandler(TOPICS.current_service, updateCurrentService);
-
-
 function compareValues(userVal: string, op: string, filterVal: string): boolean {
     const a = isNaN(Number(userVal)) ? userVal : Number(userVal);
     const b = isNaN(Number(filterVal)) ? filterVal : Number(filterVal);
     switch (op) {
-        case 'eq':  return a === b;
-        case 'neq': return a !== b;
-        case 'lt':  return a < b;
-        case 'lte': return a <= b;
-        case 'gt':  return a > b;
-        case 'gte': return a >= b;
-        default:    return false;
+        case 'eq':
+            return a === b;
+        case 'neq':
+            return a !== b;
+        case 'lt':
+            return a < b;
+        case 'lte':
+            return a <= b;
+        case 'gt':
+            return a > b;
+        case 'gte':
+            return a >= b;
+        default:
+            return false;
     }
 }
 
@@ -72,10 +107,9 @@ function matchExpression(fields: Record<string, string>, expr: Expression): bool
     } else if ('and' in expr) {
         return expr.and.every(e => matchExpression(fields, e));
     } else {
-        return (expr as any).or.some((e: Expression) => matchExpression(fields, e));
+        return expr.or.some(e => matchExpression(fields, e));
     }
 }
-
 
 async function getCurrentUser(): Promise<string> {
     return await readCurrentUser();
@@ -85,7 +119,9 @@ async function getCurrentUser(): Promise<string> {
 // nonexistent id, 405 for a profile not visible to the current service.
 async function setCurrentUser(uuid: string): Promise<void> {
     const currentService = await readCurrentService();
-    if (!currentService) throw new ApiError(300);
+    if (!currentService) {
+        throw new ApiError(300);
+    }
     await assertUserVisible(uuid, currentService);
     await redisFunctions.sessionUser(uuid);
     mqttClient.publish(TOPICS.current_user, uuid, true);
@@ -95,7 +131,9 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
     // C.6.14.1: only the profiles visible to the service; without a DTV
     // service in use, 300.
     const currentService = await resolveActiveService();
-    if (!currentService) throw new ApiError(300);
+    if (!currentService) {
+        throw new ApiError(300);
+    }
 
     const userIds = await redis.smembers('users:index');
 
@@ -135,9 +173,13 @@ async function getUserList(body: Expression): Promise<UsersIdList> {
 // the active service (error 300 if there is none); an explicit scid stands
 // for itself.
 async function resolveScid(scidParam?: string): Promise<string> {
-    if (scidParam && scidParam !== 'current-service') return scidParam;
+    if (scidParam && scidParam !== 'current-service') {
+        return scidParam;
+    }
     const current = await resolveActiveService();
-    if (!current) throw new ApiError(300);
+    if (!current) {
+        throw new ApiError(300);
+    }
     return current;
 }
 
@@ -145,15 +187,15 @@ async function resolveScid(scidParam?: string): Promise<string> {
 // profile is visible to the given service (405).
 async function assertUserVisible(uuid: string, scid: string): Promise<void> {
     const exists = await redis.sismember('users:index', uuid);
-    if (!exists) throw new ApiError(305, `user ${uuid} does not exist`);
+    if (!exists) {
+        throw new ApiError(305, `user ${uuid} does not exist`);
+    }
 
     const hasConsent = await redis.sismember(`user:${uuid}:consent`, scid);
-    if (!hasConsent) throw new ApiError(405);
+    if (!hasConsent) {
+        throw new ApiError(405);
+    }
 }
-
-export type AttributeResult =
-    | { kind: 'text'; value: string }
-    | { kind: 'json'; attrs: Record<string, string> };
 
 // C.6.14.2: an attribute in the query (the key is the name; also
 // ?attribute=<name>) gives its value as plain text; without one, JSON with
@@ -184,13 +226,6 @@ async function getUserAttributes(uuid: string, scidParam: string | undefined, qu
     return { kind: 'json', attrs: { ...basics, ...broadcaster } };
 }
 
-// C.6.14.6: whether the file is the avatar of a profile visible to the
-// service ('granted'); only of profiles not visible: 'no-consent' (405,
-// Table C.75); of no profile: 'no-owner' (305). The service checked is the
-// current one (session:current-service-id), not the <service-context-id> of
-// the URL.
-export type AvatarAccess = 'granted' | 'no-consent' | 'no-owner';
-
 async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
     const currentService = await readCurrentService();
     const userIds = await redis.smembers('users:index');
@@ -207,20 +242,14 @@ async function checkConsent(avatarPath: string): Promise<AvatarAccess> {
         const avatar = results[i * 2] as string | null;
         const hasConsent = results[i * 2 + 1];
         if (avatar === avatarPath) {
-            if (hasConsent) return 'granted';
+            if (hasConsent) {
+                return 'granted';
+            }
             owned = true;
         }
     }
     return owned ? 'no-consent' : 'no-owner';
 }
-
-
-// Basic attributes a broadcaster may not redefine.
-const PROTECTED_BASICS = ['id', 'nickname', 'parentalControl', 'maxContentRating'];
-
-// Quota of the private area per profile and service context (10.3.3: up to
-// 20 MB).
-const PRIVATE_AREA_QUOTA_BYTES = 20 * 1024 * 1024;
 
 // C.6.14.5: writes or creates broadcaster attributes; the value '' removes
 // the attribute. Returns the changed set (the JSON of the API response).
@@ -245,7 +274,11 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
     for (const [k, v] of entries) {
         const val = String(v);
         changed[k] = val;
-        if (val === '') toDel.push(k); else toSet[k] = val;
+        if (val === '') {
+            toDel.push(k);
+        } else {
+            toSet[k] = val;
+        }
     }
 
     // Measures the resulting hash before writing, to answer with the quota
@@ -270,14 +303,6 @@ async function writeBroadcasterAttrs(uuid: string, scidParam: string | undefined
     return changed;
 }
 
-
-// Table C.74, "Restrictions": "it is necessary to notify the user that the
-// application wants to change/add the attribute". An informative notice
-// after writing, without confirmation; not retained, so that an old notice
-// does not come back when the TV page reconnects.
-export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
-export const INFO_POPUP_TIMEOUT_MS = 5000;
-
 // The previous state is the HGETALL of the quota check, which is not atomic
 // with the write: a concurrent write in between may change the result.
 function attributesChanged(before: Record<string, string>, toSet: Record<string, string>, toDel: string[]): boolean {
@@ -300,14 +325,9 @@ async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
             : `A emissora ${broadcaster} atualizou os dados do perfil.`;
         mqttClient.publish(INFO_POPUP_TOPIC, JSON.stringify({ value, timeout: INFO_POPUP_TIMEOUT_MS }), false);
     } catch (err) {
-        console.error(`[C.6.14.5] atributos de ${uuid} gravados, mas o aviso ao usuario nao saiu: ${(err as Error)?.message}`);
+        logger.error(`[C.6.14.5] atributos de ${uuid} gravados, mas o aviso ao usuario nao saiu: ${(err as Error)?.message}`);
     }
 }
-
-
-type FileData = { size: number; mime: string; name: string; file: string };
-
-const AVATAR_KEY_PREFIX = 'avatar:';
 
 function avatarKey(name: string): string {
     return AVATAR_KEY_PREFIX + name;
@@ -328,5 +348,7 @@ async function getFile(name: string): Promise<FileData | undefined> {
     };
 }
 
+mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
+mqttClient.addTopicHandler(TOPICS.current_service, updateCurrentService);
 
 export default { getCurrentUser, setCurrentUser, getUserList, getUserAttributes, checkConsent, getFile, writeBroadcasterAttrs };

@@ -3,10 +3,8 @@ import service from './service';
 import { UserId } from './types';
 import { returnError } from '../../util';
 
-
 async function GETCurrentUser(req: Request, res: Response): Promise<void> {
-	const id = await service.getCurrentUser();
-	console.log(`pediu usuário e recebeu ${id}`);
+    const id = await service.getCurrentUser();
     res.status(200).json({ id });
 }
 
@@ -21,27 +19,27 @@ async function POSTCurrentUser(req: Request, res: Response): Promise<void> {
 }
 
 async function POSTUserList(req: Request, res: Response): Promise<void> {
-	const response = await service.getUserList(req.body);
-	res.status(200).json(response);
+    const response = await service.getUserList(req.body);
+    res.status(200).json(response);
 }
 
 // C.6.14.2: with an attribute in the query, its value as plain text;
 // without, JSON with every attribute (basic and broadcaster) in the given
 // service context. Business errors (300, 305, 405) are thrown as ApiError.
 async function GETUserAttribute(req: Request, res: Response): Promise<void> {
-	const uuid = req.params.userid;
-	if (!uuid) {
-		returnError(res, 105, 'userid');
-		return;
-	}
+    const uuid = req.params.userid;
+    if (!uuid) {
+        returnError(res, 105, 'userid');
+        return;
+    }
 
-	const scid = (req.params as Record<string, string>).serviceContextId;
-	const result = await service.getUserAttributes(uuid, scid, req.query as Record<string, unknown>);
-	if (result.kind === 'text') {
-		res.status(200).type('text/plain').send(result.value);
-	} else {
-		res.status(200).json(result.attrs);
-	}
+    const scid = (req.params as Record<string, string>).serviceContextId;
+    const result = await service.getUserAttributes(uuid, scid, req.query as Record<string, unknown>);
+    if (result.kind === 'text') {
+        res.status(200).type('text/plain').send(result.value);
+    } else {
+        res.status(200).json(result.attrs);
+    }
 }
 
 async function GETUserFile(req: Request, res: Response): Promise<void> {
@@ -79,7 +77,6 @@ async function GETUserFile(req: Request, res: Response): Promise<void> {
     }
 }
 
-
 // C.6.14.5: the value '' removes the attribute; answers the JSON of the
 // changed attributes.
 async function POSTUserAttributes(req: Request, res: Response): Promise<void> {
@@ -97,4 +94,4 @@ async function POSTUserAttributes(req: Request, res: Response): Promise<void> {
     res.status(200).json(changed);
 }
 
-export default { GETCurrentUser, POSTCurrentUser, POSTUserList, GETUserAttribute, GETUserFile, POSTUserAttributes }
+export default { GETCurrentUser, POSTCurrentUser, POSTUserList, GETUserAttribute, GETUserFile, POSTUserAttributes };
