@@ -319,7 +319,7 @@ test('a rota escolhe o codigo, nao o X-TV30-API-Version: /tv3 lista com url tamb
     assert.equal(await listening(localPort), false);
 });
 
-// Self-signed certificate like the one of tls-init
+// Self-signed certificate like the one the edge generates
 // (infra/edgegateway/tls-init.sh); without openssl, undefined.
 function selfSignedCert(): string | undefined {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv30-ws-tls-'));
