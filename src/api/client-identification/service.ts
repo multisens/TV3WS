@@ -8,7 +8,7 @@ export const pairingMethods: string[] = ['qrcode', 'kex'];
 
 // Lock of the QR code and PIN pop-ups: they stay on screen until the
 // /tv3/token that checks the challenge (C.4.3.2, C.4.3.3) or until this time
-// expires.
+// expires; the pending attempt ends with them.
 export const PAIRING_POPUP_TIMEOUT_MS = 120 * 1000;
 
 type PairingPopUp = 'qrcode' | 'pin';
@@ -118,6 +118,13 @@ function generateChallenge(client: Client, secret: Buffer<ArrayBufferLike>) {
     return base64UrlEncode(encrypted);
 }
 
+// True while the QR code or PIN pop-up of the client holds the layer: the
+// pending attempt of the client is valid only until the end of the lock.
+function pairingOpen(clientId: string): boolean {
+    const o = camadaOcupada();
+    return o !== undefined && o.tipo !== 'yesno' && o.dono === clientId;
+}
+
 // Closes the pairing pop-up of the client, if it is still its own, and
 // releases the layer. A failure is only logged.
 function endPairing(clientId: string): void {
@@ -133,4 +140,4 @@ function endPairing(clientId: string): void {
     }
 }
 
-export default { askAuthorization, generateQRCodeSecret, generatePINSecret, generateChallenge, endPairing, reservarCamada, liberarReserva }
+export default { askAuthorization, generateQRCodeSecret, generatePINSecret, generateChallenge, pairingOpen, endPairing, reservarCamada, liberarReserva }

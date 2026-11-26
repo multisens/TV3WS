@@ -73,6 +73,11 @@ async function GETToken(req: Request, res: Response): Promise<void> {
     if (clientId !== undefined && refreshToken === undefined) {
         pending = manager.getPendingClient(clientId);
     }
+    // The attempt ends with the lock of its pop-up.
+    if (clientId !== undefined && pending !== undefined && !service.pairingOpen(clientId)) {
+        manager.discardPending(clientId);
+        pending = undefined;
+    }
     if (clientId !== undefined && pending === undefined) {
         const authorized = await manager.isAuthorized(clientId);
         if (!authorized) {

@@ -60,6 +60,8 @@ const router = require('../src/api/client-identification').default;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { PAIRING_POPUP_TIMEOUT_MS, _camadaParaTestes } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
+const manager = require('../src/modules/auth-manager/manager') as typeof import('../src/modules/auth-manager/manager');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
 
 // --- server ------------------------------------------------------------------
@@ -316,7 +318,7 @@ test('erro depois da reserva (gravacao recusada pela funcao do Redis) libera a c
     assert.equal((await authorizeRaw(novoLocal())).status, 200);
 });
 
-test('a trava de 120 s libera a camada; o sucesso tardio de A nao fecha o QR code de B', async () => {
+test('a trava de 120 s libera a camada e encerra a tentativa de A; o desafio tardio de A da 102 e nao fecha o QR code de B', async () => {
     let agora = Date.now();
     _camadaParaTestes.relogio(() => agora);
     const a = await authorize('qrcode');
@@ -325,12 +327,32 @@ test('a trava de 120 s libera a camada; o sucesso tardio de A nao fecha o QR cod
     agora += PAIRING_POPUP_TIMEOUT_MS;
     const b = await authorize('qrcode');
     const from = published.length;
-    // The challenge of A is still valid after the lock, but the QR code on
-    // screen is the one of B.
-    assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
+    // The attempt of A ended with the lock; the QR code on screen is the one
+    // of B.
+    expectError(await token(a.cid, challengeResponse(a)), 102);
+    assert.equal(manager.getPendingClient(a.cid), undefined, 'tentativa de A descartada');
     assert.deepEqual(on(QR, from), [], 'o fim de A depois da trava nao fecha o pop-up de B');
     assert.equal((await token(b.cid, challengeResponse(b))).status, 200);
     assert.deepEqual(on(QR, from), [CLOSE]);
+});
+
+test('dentro da trava, o desafio errado da 102 e pode ser respondido de novo; um instante antes do fim, o certo conclui', async () => {
+    let agora = Date.now();
+    _camadaParaTestes.relogio(() => agora);
+    const a = await authorize('kex');
+    expectError(await token(a.cid, 'AAAAAAAAAAAAAAAAAAAAAA'), 102);
+    expectError(await token(a.cid, 'AAAAAAAAAAAAAAAAAAAAAA'), 102);
+    agora += PAIRING_POPUP_TIMEOUT_MS - 1;
+    assert.equal((await token(a.cid, challengeResponse(a))).status, 200);
+});
+
+test('sem outro pedido depois da trava, o desafio certo de A da 102', async () => {
+    let agora = Date.now();
+    _camadaParaTestes.relogio(() => agora);
+    const a = await authorize('kex');
+    agora += PAIRING_POPUP_TIMEOUT_MS;
+    expectError(await token(a.cid, challengeResponse(a)), 102);
+    assert.equal(manager.getPendingClient(a.cid), undefined);
 });
 
 test('cliente local (refresh-token): /tv3/token nao publica fechamento de pop-up', async () => {

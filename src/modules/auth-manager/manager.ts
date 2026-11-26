@@ -32,8 +32,8 @@ const ACCESS_TOKEN_TTL = 24 * 60 * 60;
 // A clientid is in at most one of the sets. authorizedClients caches the
 // live object of the stored clients. pendingClients keeps a non-local
 // client that accepted the pop-up, with the pairing material, until the
-// /tv3/token that checks the challenge (C.4.2.3); memory only, lost on a
-// restart of tv3ws.
+// /tv3/token that checks the challenge (C.4.2.3) or the end of the lock of
+// the pairing pop-up; memory only, lost on a restart of tv3ws.
 const CLIENT_KEY_PREFIX = 'client:';
 const AUTHORIZED_KEY = 'clients:authorized';
 const BLOCKED_KEY = 'clients:blocked';
@@ -87,7 +87,8 @@ export function getPendingClient(id: string): Client | undefined {
     return pendingClients.get(id);
 }
 
-// A new /tv3/authorize of the same clientid ends the pending attempt.
+// A new /tv3/authorize of the same clientid, or the end of the lock of the
+// pairing pop-up, ends the pending attempt.
 export function discardPending(id: string): void {
     pendingClients.delete(id);
 }
