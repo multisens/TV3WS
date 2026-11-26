@@ -6,7 +6,6 @@ const REQUIRED_ENV = [
     'REDIS_HOST',
     'JWT_SECRET',
     'JWT_ISSUER',
-    'USER_THUMBS',
     'HTTP_PORT',
     'HTTPS_PORT',
     'WS_PORT_MIN',

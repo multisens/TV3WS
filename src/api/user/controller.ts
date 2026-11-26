@@ -44,39 +44,39 @@ async function GETUserAttribute(req: Request, res: Response): Promise<void> {
 	}
 }
 
-function GETUserFile(req: Request, res: Response): void {
-    if (Object.keys(req.query).length == 0) {
-		returnError(res, 105, 'path');
-		return;
-	}
+async function GETUserFile(req: Request, res: Response): Promise<void> {
+    if (Object.keys(req.query).length === 0) {
+        returnError(res, 105, 'path');
+        return;
+    }
 
-	const path = req.query.path as string;
-	service.checkConsent(path)
-	.then((access) => {
-		// Owner profile of the avatar not visible to the current service: 405
-		// (Table C.75).
-		if (access === 'no-consent') {
-			returnError(res, 405, path);
-		}
-		else if (access !== 'granted') {
-			returnError(res, 305, path);
-		}
-		else {
-			// Path outside USER_THUMBS or nonexistent: 305 (Table C.75).
-			const file_data = service.getFile(path);
-			if (file_data === undefined) {
-				returnError(res, 305, path);
-				return;
-			}
+    const path = req.query.path as string;
+    try {
+        const access = await service.checkConsent(path);
+        // Owner profile of the avatar not visible to the current service:
+        // 405 (Table C.75).
+        if (access === 'no-consent') {
+            returnError(res, 405, path);
+            return;
+        }
+        if (access !== 'granted') {
+            returnError(res, 305, path);
+            return;
+        }
+        // No image of the avatar set with this name: 305 (Table C.75).
+        const fileData = await service.getFile(path);
+        if (fileData === undefined) {
+            returnError(res, 305, path);
+            return;
+        }
 
-			res.setHeader('Content-Length', file_data.size);
-			res.setHeader('Content-Type', file_data.mime);
-			res.setHeader('Content-Disposition', `attachment; filename=${file_data.name}`);
-			res.write(file_data.file, 'binary');
-			res.end();
-		}
-	})
-	.catch((err) => returnError(res, 200, err?.message));
+        res.setHeader('Content-Length', fileData.size);
+        res.setHeader('Content-Type', fileData.mime);
+        res.setHeader('Content-Disposition', `attachment; filename=${fileData.name}`);
+        res.end(fileData.file);
+    } catch (err) {
+        returnError(res, 200, (err as Error)?.message);
+    }
 }
 
 

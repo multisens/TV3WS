@@ -8,17 +8,7 @@ jobs:
   build-image:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout TV3WS (self)
-        uses: actions/checkout@v4
-        with:
-          path: tv3ws
-
-      - name: Checkout Infra (Dockerfile and extra contexts)
-        uses: actions/checkout@v4
-        with:
-          repository: multisens/Infra
-          token: ${{ secrets.TV30_REPO_TOKEN }}
-          path: infra
+      - uses: actions/checkout@v4
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -31,11 +21,7 @@ jobs:
       - name: Build and push tv30-tv3ws
         uses: docker/build-push-action@v5
         with:
-          context: ./tv3ws
-          file: ./infra/dockerfiles/tv3ws.Dockerfile
-          build-contexts: |
-            tv30-data=./infra/user-files-template
-            tv30-scripts=./infra/dockerfiles
+          context: .
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/tv30-tv3ws:${{ github.sha }}

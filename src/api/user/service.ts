@@ -1,11 +1,8 @@
 import * as dotenv from 'dotenv';
-import fs from 'fs';
 import mqttClient, { TOPICS } from '../../mqtt-client';
-import path from 'path';
 import redis from '../../redis-client';
 import * as redisFunctions from '../../redis-functions';
 import { ApiError, execOrThrow } from '../../util';
-import { resolveInsideDir } from '../../util/safe-path';
 import { Expression, UserAttributes, UsersIdList } from './types';
 dotenv.config();
 
@@ -310,36 +307,25 @@ async function notifyUserOfWrite(uuid: string, scid: string): Promise<void> {
 
 type FileData = { size: number; mime: string; name: string; file: string };
 
-// Resolved inside USER_THUMBS whatever the value of the avatar field.
-// undefined = refused, nonexistent or not a file (305, Table C.75).
-function getFile(fpath: string): FileData | undefined {
-    const entry = resolveInsideDir(process.env.USER_THUMBS, fpath);
-    if (entry === undefined || !entry.stat.isFile()) return undefined;
-    const file_path = entry.path;
-    const file_name = path.parse(file_path).base;
-    const stat = entry.stat;
-    const file = fs.readFileSync(file_path, 'binary');
-    return {
-        size: stat.size,
-        mime: getMime(path.extname(file_name)),
-        name: file_name,
-        file,
-    };
+const AVATAR_KEY_PREFIX = 'avatar:';
+
+function avatarKey(name: string): string {
+    return AVATAR_KEY_PREFIX + name;
 }
 
-// Table C.75: Content-Type by the MIME type derived from the extension.
-// These are the avatar ones; any other is application/octet-stream, as in
-// C.6.4.7 (Table C.17).
-const MIME_BY_EXT: Record<string, string> = {
-    '.svg': 'image/svg+xml',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.webp': 'image/webp',
-};
-
-function getMime(ext: string): string {
-    return MIME_BY_EXT[ext.toLowerCase()] ?? 'application/octet-stream';
+// The image of the avatar set with this name; undefined if the set has none
+// (305, Table C.75). Table C.75: Content-Type by the media type of the image.
+async function getFile(name: string): Promise<FileData | undefined> {
+    const image = await redis.hgetall(avatarKey(name));
+    if (image.body === undefined || image.type === undefined) {
+        return undefined;
+    }
+    return {
+        size: Buffer.byteLength(image.body),
+        mime: image.type,
+        name,
+        file: image.body,
+    };
 }
 
 

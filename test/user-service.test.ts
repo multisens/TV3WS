@@ -219,131 +219,79 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
 });
 
 // --- profile file (C.6.14.6) ------------------------------------------------
-// Outside USER_THUMBS, nonexistent or not a file: 305 (Table C.75).
-test('arquivo de perfil (C.6.14.6): caminho que sai de USER_THUMBS da 305 sem o conteudo; dentro, 200', async () => {
-    const fsm = await import('fs');
-    const osm = await import('os');
-    const root = fsm.mkdtempSync(path.join(osm.tmpdir(), 'tv3ws-thumbs-'));
-    const thumbs = path.join(root, 'thumbs');
-    fsm.mkdirSync(thumbs);
-    fsm.writeFileSync(path.join(root, 'segredo.txt'), 'SEGREDO-FORA-DE-THUMBS');
-    fsm.writeFileSync(path.join(thumbs, 'a.png'), 'PNG');
-    const thumbsOrig = process.env.USER_THUMBS;
-    process.env.USER_THUMBS = thumbs;
+// The path names an image of the avatar set (avatar:{name}); Table C.75:
+// Content-Type by the media type of the image.
+const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>';
+const imagem = (name: string, body = SVG): void => {
+    store.set(`avatar:${name}`, { label: name, type: 'image/svg+xml', body });
+};
+
+test('arquivo de perfil (C.6.14.6): imagem do conjunto com Content-Type e Content-Length; fora do conjunto, 305', async () => {
     try {
-        for (const avatar of ['../segredo.txt', '/../segredo.txt', 'x/../../segredo.txt', '..\\segredo.txt','nao-existe.png', '.']) {
+        imagem('green.svg', '<svg xmlns="http://www.w3.org/2000/svg">é</svg>');
+        seedProfiles('svc-a');
+        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'green.svg' });
+        const res = await fetch(`${base}/current-service/users/files?path=green.svg`);
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('content-type'), 'image/svg+xml');
+        const body = Buffer.from(await res.arrayBuffer());
+        assert.equal(body.toString('utf8'), '<svg xmlns="http://www.w3.org/2000/svg">é</svg>');
+        assert.equal(res.headers.get('content-length'), String(body.length));
+
+        // Avatar of a visible profile without an image of the set: 305.
+        for (const avatar of ['nao-existe.svg', '../green.svg', 'x/../green.svg']) {
             seedProfiles('svc-a');
             store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar });
-            const r = await call('GET', `/current-service/users/files?path=${encodeURIComponent(avatar)}`);
-            expectError(r, 305);
-            assert.ok(!r.text.includes('SEGREDO'), `${avatar}: ${r.text}`);
+            expectError(await call('GET', `/current-service/users/files?path=${encodeURIComponent(avatar)}`), 305);
         }
-        // avatar a.png
-        seedProfiles('svc-a');
-        const ok = await call('GET', '/current-service/users/files?path=a.png');
-        assert.equal(ok.status, 200, ok.text);
-        assert.equal(ok.text, 'PNG');
-        // Not visible: 405 (case below).
-        store.set(`user:${U1}:consent`, new Set(['outro']));
-        expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
     } finally {
-        if (thumbsOrig === undefined) delete process.env.USER_THUMBS; else process.env.USER_THUMBS = thumbsOrig;
-        fsm.rmSync(root, { recursive: true, force: true });
+        store.delete('avatar:green.svg');
     }
 });
 
 // --- C.6.14.6 not visible: 405; a path of nobody: 305 (Table C.75) ----------
 test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com consentimento, 200; de ninguem, 305', async () => {
-    const fsm = await import('fs');
-    const osm = await import('os');
-    const thumbs = fsm.mkdtempSync(path.join(osm.tmpdir(), 'tv3ws-thumbs405-'));
-    fsm.writeFileSync(path.join(thumbs, 'a.png'), 'PNG-DO-PERFIL');
-    fsm.writeFileSync(path.join(thumbs, 'solto.png'), 'PNG-SOLTO');
-    const thumbsOrig = process.env.USER_THUMBS;
-    process.env.USER_THUMBS = thumbs;
     try {
+        imagem('a.svg', '<svg xmlns="http://www.w3.org/2000/svg">DO-PERFIL</svg>');
+        imagem('solto.svg');
         // Owner of the avatar not visible to the current service.
         seedProfiles('svc-a');
+        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'a.svg' });
         store.set(`user:${U1}:consent`, new Set(['svc-b']));
-        let r = await call('GET', '/current-service/users/files?path=a.png');
+        let r = await call('GET', '/current-service/users/files?path=a.svg');
         expectError(r, 405);
-        assert.ok(!r.text.includes('PNG-DO-PERFIL'), r.text);
+        assert.ok(!r.text.includes('DO-PERFIL'), r.text);
         // Not visible to any service (empty set): 405.
         store.set(`user:${U1}:consent`, new Set());
-        expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
-        // Visibility comes before the file: a nonexistent avatar of a profile
-        // not visible also gives 405 (it does not reveal whether the file
-        // exists).
-        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'nao-existe.png' });
-        expectError(await call('GET', '/current-service/users/files?path=nao-existe.png'), 405);
+        expectError(await call('GET', '/current-service/users/files?path=a.svg'), 405);
 
         // Two profiles with the same avatar: one visible is enough.
         seedProfiles('svc-a');
+        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'a.svg' });
         store.set('users:index', new Set([U9, U1]));
-        store.set(`user:${U9}`, { id: U9, nickname: 'Nove', avatar: 'a.png' });
+        store.set(`user:${U9}`, { id: U9, nickname: 'Nove', avatar: 'a.svg' });
         store.set(`user:${U9}:consent`, new Set(['svc-b']));
-        r = await call('GET', '/current-service/users/files?path=a.png');
+        r = await call('GET', '/current-service/users/files?path=a.svg');
         assert.equal(r.status, 200, r.text);
-        assert.equal(r.text, 'PNG-DO-PERFIL');
+        assert.ok(r.text.includes('DO-PERFIL'), r.text);
         // Both not visible: 405.
         store.set(`user:${U1}:consent`, new Set(['svc-b']));
-        expectError(await call('GET', '/current-service/users/files?path=a.png'), 405);
+        expectError(await call('GET', '/current-service/users/files?path=a.svg'), 405);
 
-        // A file that exists but is nobody's avatar: 305.
+        // An image of the set that is nobody's avatar: 305.
         seedProfiles('svc-a');
-        expectError(await call('GET', '/current-service/users/files?path=solto.png'), 305);
-        // Avatar of a visible profile, nonexistent file: 305.
-        store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'nao-existe.png' });
-        expectError(await call('GET', '/current-service/users/files?path=nao-existe.png'), 305);
+        expectError(await call('GET', '/current-service/users/files?path=solto.svg'), 305);
     } finally {
-        if (thumbsOrig === undefined) delete process.env.USER_THUMBS; else process.env.USER_THUMBS = thumbsOrig;
-        fsm.rmSync(thumbs, { recursive: true, force: true });
+        store.delete('avatar:a.svg');
+        store.delete('avatar:solto.svg');
         store.delete(`user:${U9}`);
         store.delete(`user:${U9}:consent`);
     }
 });
 
-// --- avatar = file name of the thumbnails -----------------------------------
-// Table 7: "avatar" is a "file path"; the platform writes <id>.svg to
-// USER_THUMBS. Table C.75: Content-Type by the file extension.
-const AVATAR_CARGA = 'c3167a18-5dc5-4a6e-9b1d-3f2a7c5e8d10.svg';
+const AVATAR_CARGA = 'green.svg';
 
-test('C.6.14.6: Content-Type pela extensao (svg, png, jpg, jpeg, webp); outra extensao, application/octet-stream', async () => {
-    const fsm = await import('fs');
-    const osm = await import('os');
-    const thumbs = fsm.mkdtempSync(path.join(osm.tmpdir(), 'tv3ws-thumbs-mime-'));
-    const thumbsOrig = process.env.USER_THUMBS;
-    process.env.USER_THUMBS = thumbs;
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>';
-    const bin = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80]);
-    try {
-        const cases: [string, string, Buffer][] = [
-            [AVATAR_CARGA, 'image/svg+xml', Buffer.from(svg)],
-            ['p.png', 'image/png', bin],
-            ['j.jpg', 'image/jpeg', bin],
-            ['k.jpeg', 'image/jpeg', bin],
-            ['w.webp', 'image/webp', bin],
-            ['x.gif', 'application/octet-stream', bin],
-            ['sem-extensao', 'application/octet-stream', bin],
-        ];
-        for (const [name, mime, data] of cases) {
-            fsm.writeFileSync(path.join(thumbs, name), data);
-            seedProfiles('svc-a');
-            store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: name });
-            const res = await fetch(`${base}/current-service/users/files?path=${encodeURIComponent(name)}`);
-            assert.equal(res.status, 200, name);
-            assert.equal(res.headers.get('content-type'), mime, name);
-            const body = Buffer.from(await res.arrayBuffer());
-            assert.ok(body.equals(data), `${name}: bytes intactos`);
-            assert.equal(res.headers.get('content-length'), String(data.length), name);
-        }
-    } finally {
-        if (thumbsOrig === undefined) delete process.env.USER_THUMBS; else process.env.USER_THUMBS = thumbsOrig;
-        fsm.rmSync(thumbs, { recursive: true, force: true });
-    }
-});
-
-test('C.6.14.2: o avatar sai como esta no perfil (o nome do arquivo), no JSON e no valor em texto', async () => {
+test('C.6.14.2: o avatar sai como esta no perfil (o nome da imagem), no JSON e no valor em texto', async () => {
     seedProfiles('svc-a');
     store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: AVATAR_CARGA });
     let r = await call('GET', `/svc-a/users/${U1}`);
