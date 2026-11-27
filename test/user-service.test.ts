@@ -3,6 +3,7 @@
 // does not write lastAccess); a Redis error in a pipeline becomes 404
 // {error:200}, not a "valid" response.
 import { test, before, after } from 'node:test';
+
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -10,17 +11,32 @@ import { AddressInfo } from 'net';
 import { Server } from 'http';
 import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
+import { ApiJson } from './helpers/api-json';
 
-const fake = createFakeRedis();
-const store = fake.store;
 // Profile ids as UUIDs (Table 7): the double does not check the schema, but
 // the ids have the format Redis accepts.
 const U1 = '0b6f3e2a-7c1d-4e5f-9a8b-2c3d4e5f6a7b';
+
 const U9 = '9d8c7b6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const PX = '3f2e1d0c-9b8a-4f7e-a6d5-c4b3a2918070';
 
+// --- profile file (C.6.14.6) ------------------------------------------------
+// The path names an image of the avatar set (avatar:{name}); Table C.75:
+// Content-Type by the media type of the image.
+const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>';
+
+const AVATAR_SEEDED = 'green.svg';
+
+// --- notice to the user on C.6.14.5 (Table C.74, "Restrictions") ------------
+// A write with a change publishes, not retained, on
+// aop/display/layers/popup/info; without a change or on failure, nothing.
+const INFO = 'aop/display/layers/popup/info';
+
+const fake = createFakeRedis();
+const store = fake.store;
 const handlers = new Map<string, (m: string, t?: string) => void | Promise<void>>();
 const published: [string, string, boolean][] = [];
+
 const fakeMqtt = {
     addTopicHandler(t: string, f: (m: string, t?: string) => void | Promise<void>) { handlers.set(t, f); },
     removeTopicHandler() { /* nada */ },
@@ -28,15 +44,8 @@ const fakeMqtt = {
     parseTopic(t: string) { return t; },
 };
 
-function stub(rel: string, exports: object): void {
-    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
-    const m = new Module(file);
-    m.filename = file;
-    m.loaded = true;
-    m.exports = { __esModule: true, ...exports };
-    require.cache[file] = m;
-}
 stub('redis-client', { default: fake.redis });
+
 stub('mqtt-client', {
     default: fakeMqtt,
     TOPICS: { current_user: 'aop/currentUser', current_service: 'aop/currentService' },
@@ -48,11 +57,13 @@ process.env.USER_DATA_FILE = path.join(__dirname, '..', 'user-files', 'userData.
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const userAPI = require('../src/api/user').default;
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
 
 let server: Server;
 let base = '';
+
 before(async () => {
     const app = express();
     app.use(express.json());
@@ -62,31 +73,8 @@ before(async () => {
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3`;
 });
+
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
-
-async function call(method: string, route: string, body?: unknown) {
-    const res = await fetch(`${base}${route}`, {
-        method,
-        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const text = await res.text();
-    let json: any;
-    try { json = text ? JSON.parse(text) : undefined; } catch { json = undefined; }
-    return { status: res.status, json, text };
-}
-const expectError = (r: { status: number; json: any }, code: number) => {
-    assert.equal(r.status, 404);
-    assert.equal(r.json?.error, code, JSON.stringify(r.json));
-    assert.equal(typeof r.json.description, 'string');
-};
-
-function seedProfiles(svc: string) {
-    store.set('session:current-service-id', svc);
-    store.set('users:index', new Set([U1]));
-    store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'a.png' });
-    store.set(`user:${U1}:consent`, new Set([svc]));
-}
 
 // --- profiles read only -----------------------------------------------------
 test('nao assina aop/users, aop/currentUser nem aop/currentService: a sessao e lida do Redis', () => {
@@ -112,14 +100,14 @@ test('POST current-user (C.6.14.4): grava a sessao e publica retido, sem lastAcc
 test('POST current-user (Tabela C.73): 305 para id inexistente, 405 sem acesso, 300 sem servico; nada gravado', async () => {
     seedProfiles('svc-a');
     store.set('session:current-user', U1);
-    const antes = published.length;
+    const previous = published.length;
     expectError(await call('POST', '/current-service/users/current-user', { id: U9 }), 305);
     store.set(`user:${U1}:consent`, new Set(['svc-b']));
     expectError(await call('POST', '/current-service/users/current-user', { id: U1 }), 405);
     store.delete('session:current-service-id');
     expectError(await call('POST', '/current-service/users/current-user', { id: U1 }), 300);
     assert.equal(store.get('session:current-user'), U1);
-    assert.equal(published.length, antes);
+    assert.equal(published.length, previous);
 });
 
 test('GET current-user (Table C.72): the visible profile, 405 without access, empty id without a current profile, 300 without a service', async () => {
@@ -203,39 +191,31 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
     const errorOrig = console.error;
     console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
     const msg = 'TV30SCHEMA tv30_session_user: session:current-user value: has 65 characters, maximum 64';
-    fake.recusar('tv30_session_user', msg);
-    const publicados = published.length;
+    fake.refuse('tv30_session_user', msg);
+    const publishedBefore = published.length;
     try {
         const r = await call('POST', '/current-service/users/current-user', { id: U1 });
         expectError(r, 200);
-        assert.ok(r.json.description.includes(msg), r.json.description);
+        assert.ok(r.json?.description.includes(msg), r.json?.description);
         assert.ok(logs.some(l => l.includes(msg)), 'errorHandler loga a mensagem');
-        assert.equal(published.length, publicados, 'nao publica o que nao gravou');
+        assert.equal(published.length, publishedBefore, 'nao publica o que nao gravou');
     } finally {
-        fake.recusar('tv30_session_user');
+        fake.refuse('tv30_session_user');
         console.error = errorOrig;
     }
-    fake.recusar('tv30_broadcaster_attributes', `TV30SCHEMA tv30_broadcaster_attributes: user:${U1}:broadcaster-attrs:svc-a profile "${U1}" outside users:index (invariant profile-dependents)`);
+    fake.refuse('tv30_broadcaster_attributes', `TV30SCHEMA tv30_broadcaster_attributes: user:${U1}:broadcaster-attrs:svc-a profile "${U1}" outside users:index (invariant profile-dependents)`);
     console.error = () => undefined;
     try {
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'azul' }), 200);
     } finally {
-        fake.recusar('tv30_broadcaster_attributes');
+        fake.refuse('tv30_broadcaster_attributes');
         console.error = errorOrig;
     }
 });
 
-// --- profile file (C.6.14.6) ------------------------------------------------
-// The path names an image of the avatar set (avatar:{name}); Table C.75:
-// Content-Type by the media type of the image.
-const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>';
-const imagem = (name: string, body = SVG): void => {
-    store.set(`avatar:${name}`, { label: name, type: 'image/svg+xml', body });
-};
-
 test('arquivo de perfil (C.6.14.6): imagem do conjunto com Content-Type e Content-Length; fora do conjunto, 305', async () => {
     try {
-        imagem('green.svg', '<svg xmlns="http://www.w3.org/2000/svg">é</svg>');
+        writeImage('green.svg', '<svg xmlns="http://www.w3.org/2000/svg">é</svg>');
         seedProfiles('svc-a');
         store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'green.svg' });
         const res = await fetch(`${base}/current-service/users/files?path=green.svg`);
@@ -259,8 +239,8 @@ test('arquivo de perfil (C.6.14.6): imagem do conjunto com Content-Type e Conten
 // --- C.6.14.6 not visible: 405; a path of nobody: 305 (Table C.75) ----------
 test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com consentimento, 200; de ninguem, 305', async () => {
     try {
-        imagem('a.svg', '<svg xmlns="http://www.w3.org/2000/svg">DO-PERFIL</svg>');
-        imagem('solto.svg');
+        writeImage('a.svg', '<svg xmlns="http://www.w3.org/2000/svg">DO-PERFIL</svg>');
+        writeImage('solto.svg');
         // Owner of the avatar not visible to the current service.
         seedProfiles('svc-a');
         store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'a.svg' });
@@ -296,24 +276,16 @@ test('arquivo de perfil (C.6.14.6) sem consentimento: 405 sem o conteudo; com co
     }
 });
 
-const AVATAR_CARGA = 'green.svg';
-
 test('C.6.14.2: o avatar sai como esta no perfil (o nome da imagem), no JSON e no valor em texto', async () => {
     seedProfiles('svc-a');
-    store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: AVATAR_CARGA });
+    store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: AVATAR_SEEDED });
     let r = await call('GET', `/svc-a/users/${U1}`);
     assert.equal(r.status, 200, r.text);
-    assert.equal(r.json.avatar, AVATAR_CARGA);
+    assert.equal(r.json?.avatar, AVATAR_SEEDED);
     r = await call('GET', `/current-service/users/${U1}?avatar`);
     assert.equal(r.status, 200, r.text);
-    assert.equal(r.text, AVATAR_CARGA);
+    assert.equal(r.text, AVATAR_SEEDED);
 });
-
-// --- notice to the user on C.6.14.5 (Table C.74, "Restrictions") ------------
-// A write with a change publishes, not retained, on
-// aop/display/layers/popup/info; without a change or on failure, nothing.
-const INFO = 'aop/display/layers/popup/info';
-const infos = () => published.filter(([t]) => t === INFO);
 
 test('C.6.14.5: gravacao com mudanca publica o aviso (nao retido) com o id do servico e o apelido', async () => {
     seedProfiles('svc-a');
@@ -382,9 +354,9 @@ test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101,
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
-        fake.recusar('tv30_broadcaster_attributes', 'TV30SCHEMA tv30_broadcaster_attributes: test');
+        fake.refuse('tv30_broadcaster_attributes', 'TV30SCHEMA tv30_broadcaster_attributes: test');
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'verde' }), 200);
-        fake.recusar('tv30_broadcaster_attributes');
+        fake.refuse('tv30_broadcaster_attributes');
         fake.setDown(true);
         expectError(await call('POST', `/svc-a/users/${U1}`, { cor: 'verde' }), 200);
         fake.setDown(false);
@@ -396,7 +368,7 @@ test('C.6.14.5: gravacao que falha nao avisa (recusa da funcao, Redis fora, 101,
         store.set('session:current-service-id', '');
         expectError(await call('POST', `/current-service/users/${U1}`, { cor: 'verde' }), 300);
     } finally {
-        fake.recusar('tv30_broadcaster_attributes');
+        fake.refuse('tv30_broadcaster_attributes');
         fake.setDown(false);
         console.error = errorOrig;
     }
@@ -424,3 +396,47 @@ test('C.6.14.5: falha ao montar o aviso (Redis) depois da gravacao: a API respon
     assert.deepEqual(infos(), []);
     assert.ok(logs.some(l => l.includes('aviso ao usuario nao saiu') && l.includes('redis caiu')), logs.join(' | '));
 });
+
+function stub(rel: string, exports: object): void {
+    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
+    const m = new Module(file);
+    m.filename = file;
+    m.loaded = true;
+    m.exports = { __esModule: true, ...exports };
+    require.cache[file] = m;
+}
+
+async function call(method: string, route: string, body?: unknown) {
+    const res = await fetch(`${base}${route}`, {
+        method,
+        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let json: ApiJson | undefined;
+    try {
+        json = text ? JSON.parse(text) : undefined;
+    } catch {
+        json = undefined;
+    }
+    return { status: res.status, json, text };
+}
+
+const expectError = (r: { status: number; json: ApiJson | undefined }, code: number) => {
+    assert.equal(r.status, 404);
+    assert.equal(r.json?.error, code, JSON.stringify(r.json));
+    assert.equal(typeof r.json.description, 'string');
+};
+
+function seedProfiles(svc: string) {
+    store.set('session:current-service-id', svc);
+    store.set('users:index', new Set([U1]));
+    store.set(`user:${U1}`, { id: U1, nickname: 'Um', avatar: 'a.png' });
+    store.set(`user:${U1}:consent`, new Set([svc]));
+}
+
+const writeImage = (name: string, body = SVG): void => {
+    store.set(`avatar:${name}`, { label: name, type: 'image/svg+xml', body });
+};
+
+const infos = () => published.filter(([t]) => t === INFO);

@@ -1,11 +1,9 @@
-import * as dotenv from 'dotenv';
 import logger from '../../logger';
 import mqttClient, { TOPICS } from '../../mqtt-client';
 import redis from '../../redis-client';
 import * as redisFunctions from '../../redis-functions';
 import { ApiError, execOrThrow } from '../../util';
 import { Expression, UserAttributes, UsersIdList } from './types';
-dotenv.config();
 
 export type AttributeResult =
     | { kind: 'text'; value: string }
@@ -37,8 +35,7 @@ export const INFO_POPUP_TOPIC = 'aop/display/layers/popup/info';
 export const INFO_POPUP_TIMEOUT_MS = 5000;
 
 // The session is read from Redis on every call.
-
-const KEY_CURRENT_USER    = 'session:current-user';
+const KEY_CURRENT_USER = 'session:current-user';
 const KEY_CURRENT_SERVICE = 'session:current-service-id';
 
 async function readCurrentUser(): Promise<string> {

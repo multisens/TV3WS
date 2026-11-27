@@ -2,6 +2,7 @@
 // whole app.ts (Redis and MQTT by doubles). The version comes in
 // X-TV30-API-Version; Accept-Version is not interpreted here.
 import { test, before, after } from 'node:test';
+
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -13,15 +14,6 @@ import './helpers/v100-env';
 
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();
-
-function stub(rel: string, exports: object): void {
-    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
-    const m = new Module(file);
-    m.filename = file;
-    m.loaded = true;
-    m.exports = { __esModule: true, ...exports };
-    require.cache[file] = m;
-}
 stub('redis-client', { default: fake.redis });
 stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
 
@@ -30,23 +22,13 @@ const app = require('../src/app').default;
 
 let server: Server;
 let base = '';
+
 before(async () => {
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
-after(() => new Promise<void>(resolve => server.close(() => resolve())));
 
-async function call(route: string, init: RequestInit = {}) {
-    const res = await fetch(`${base}${route}`, init);
-    const text = await res.text();
-    return { status: res.status, apiVersion: res.headers.get('api-version'), json: text ? JSON.parse(text) : undefined };
-}
-function expectError(r: Awaited<ReturnType<typeof call>>, code: number, apiVersion: string) {
-    assert.equal(r.status, 404);
-    assert.equal(r.json?.error, code, JSON.stringify(r.json));
-    assert.equal(r.apiVersion, apiVersion, `API-Version do erro ${code}`);
-}
-const decided = (v: string) => ({ headers: { 'X-TV30-API-Version': v } });
+after(() => new Promise<void>(resolve => server.close(() => resolve())));
 
 test('a versao vem da borda (X-TV30-API-Version) e volta no API-Version, tambem nos erros', async () => {
     // No service in use.
@@ -92,3 +74,26 @@ test('resposta de sucesso: API-Version = a versao negociada pela borda', async (
     assert.equal(r.apiVersion, '100.0');
     assert.equal((await call('/tv3/current-service')).apiVersion, '2.0');
 });
+
+function stub(rel: string, exports: object): void {
+    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
+    const m = new Module(file);
+    m.filename = file;
+    m.loaded = true;
+    m.exports = { __esModule: true, ...exports };
+    require.cache[file] = m;
+}
+
+async function call(route: string, init: RequestInit = {}) {
+    const res = await fetch(`${base}${route}`, init);
+    const text = await res.text();
+    return { status: res.status, apiVersion: res.headers.get('api-version'), json: text ? JSON.parse(text) : undefined };
+}
+
+function expectError(r: Awaited<ReturnType<typeof call>>, code: number, apiVersion: string) {
+    assert.equal(r.status, 404);
+    assert.equal(r.json?.error, code, JSON.stringify(r.json));
+    assert.equal(r.apiVersion, apiVersion, `API-Version do erro ${code}`);
+}
+
+const decided = (v: string) => ({ headers: { 'X-TV30-API-Version': v } });

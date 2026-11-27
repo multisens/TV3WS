@@ -3,6 +3,7 @@
 // AoP writes; 300 without a service in use; "serviceId" and "serviceName"
 // omitted for a service outside the catalog.
 import { test, before, after } from 'node:test';
+
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -12,17 +13,10 @@ import { createFakeRedis } from './helpers/fake-redis';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
 import './helpers/v100-env';
 
+const SVC = 'urn:tv30:service:teste';
+
 const fake = createFakeRedis();
 const mqtt = createFakeMqtt();
-
-function stub(rel: string, exports: object): void {
-    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
-    const m = new Module(file);
-    m.filename = file;
-    m.loaded = true;
-    m.exports = { __esModule: true, ...exports };
-    require.cache[file] = m;
-}
 stub('redis-client', { default: fake.redis });
 stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
 
@@ -31,28 +25,13 @@ const app = require('../src/app').default;
 
 let server: Server;
 let url = '';
+
 before(async () => {
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3/current-service`;
 });
+
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
-
-async function get(headers: Record<string, string> = {}) {
-    const res = await fetch(url, { headers });
-    const text = await res.text();
-    return { status: res.status, apiVersion: res.headers.get('api-version'), type: res.headers.get('content-type') ?? '', json: text ? JSON.parse(text) : undefined };
-}
-const SVC = 'urn:tv30:service:teste';
-
-// The session as the AoP writes it (tv30_session_service).
-function selecionar(campos: Record<string, string>): void {
-    fake.store.set('session:current-service', { serviceContextId: SVC, serviceName: '', serviceId: '', ...campos });
-    fake.store.set('session:current-service-id', campos.serviceContextId ?? SVC);
-}
-function desfazer(): void {
-    fake.store.delete('session:current-service');
-    fake.store.set('session:current-service-id', '');
-}
 
 test('sem servico em uso (sessao sem session:current-service): 404 {error:300} com API-Version', async () => {
     const r = await get();
@@ -64,25 +43,25 @@ test('sem servico em uso (sessao sem session:current-service): 404 {error:300} c
 });
 
 test('servico do catalogo: os tres campos da Tabela C.8, serviceId inteiro', async () => {
-    selecionar({ serviceName: 'Canal Teste', serviceId: '1001' });
+    selectService({ serviceName: 'Canal Teste', serviceId: '1001' });
     try {
         const r = await get();
         assert.equal(r.status, 200, JSON.stringify(r.json));
         assert.equal(r.apiVersion, '2.0');
         assert.deepEqual(r.json, { serviceContextId: SVC, serviceName: 'Canal Teste', serviceId: 1001 });
     } finally {
-        desfazer();
+        clearSession();
     }
 });
 
 test('servico fora do catalogo: sem "serviceId" e sem "serviceName" (C.3.2.2)', async () => {
-    selecionar({});
+    selectService({});
     try {
         const r = await get();
         assert.equal(r.status, 200, JSON.stringify(r.json));
         assert.deepEqual(r.json, { serviceContextId: SVC });
     } finally {
-        desfazer();
+        clearSession();
     }
 });
 
@@ -96,19 +75,19 @@ test('o id decide: sem id, 300 mesmo com hash; hash de outro servico, so o servi
         assert.equal(r.status, 200, JSON.stringify(r.json));
         assert.deepEqual(r.json, { serviceContextId: SVC });
     } finally {
-        desfazer();
+        clearSession();
     }
 });
 
 test('version 100.0: the same fields of the session', async () => {
-    selecionar({ serviceName: 'Canal Teste', serviceId: '7' });
+    selectService({ serviceName: 'Canal Teste', serviceId: '7' });
     try {
         const r = await get({ 'X-TV30-API-Version': '100.0' });
         assert.equal(r.status, 200, JSON.stringify(r.json));
         assert.equal(r.apiVersion, '100.0');
         assert.deepEqual(r.json, { serviceContextId: SVC, serviceName: 'Canal Teste', serviceId: 7 });
     } finally {
-        desfazer();
+        clearSession();
     }
 });
 
@@ -121,9 +100,9 @@ test('integerServiceId (Tabela C.8): inteiro >= 0, em numero ou texto so de digi
 });
 
 test('a plataforma desfaz a selecao (sessao limpa): volta o 300', async () => {
-    selecionar({});
+    selectService({});
     assert.equal((await get()).status, 200);
-    desfazer();
+    clearSession();
     const r = await get();
     assert.equal(r.status, 404);
     assert.equal(r.json.error, 300, JSON.stringify(r.json));
@@ -135,3 +114,29 @@ test('o tv3ws nao grava a sessao do servico: aop/currentService nao chega a nenh
     assert.deepEqual(fake.fcalls, []);
     assert.equal(fake.store.has('session:current-service'), false);
 });
+
+function stub(rel: string, exports: object): void {
+    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
+    const m = new Module(file);
+    m.filename = file;
+    m.loaded = true;
+    m.exports = { __esModule: true, ...exports };
+    require.cache[file] = m;
+}
+
+async function get(headers: Record<string, string> = {}) {
+    const res = await fetch(url, { headers });
+    const text = await res.text();
+    return { status: res.status, apiVersion: res.headers.get('api-version'), type: res.headers.get('content-type') ?? '', json: text ? JSON.parse(text) : undefined };
+}
+
+// The session as the AoP writes it (tv30_session_service).
+function selectService(fields: Record<string, string>): void {
+    fake.store.set('session:current-service', { serviceContextId: SVC, serviceName: '', serviceId: '', ...fields });
+    fake.store.set('session:current-service-id', fields.serviceContextId ?? SVC);
+}
+
+function clearSession(): void {
+    fake.store.delete('session:current-service');
+    fake.store.set('session:current-service-id', '');
+}

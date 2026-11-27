@@ -3,6 +3,7 @@
 // through the whole app.ts and the entry server, with redis-client and
 // mqtt-client replaced by test doubles.
 import { test, before, after, beforeEach } from 'node:test';
+
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -10,38 +11,24 @@ import { AddressInfo } from 'net';
 import { Server } from 'http';
 import { WebSocket } from 'ws';
 import { createFakeRedis } from './helpers/fake-redis';
+import type Registry from '../src/v100.0/modules/remote-device/registry';
 import { createFakeMqtt, TOPICS } from './helpers/fake-mqtt';
 
-// read when the modules load
-process.env.TV3WS_WS_TLS = 'false';
-process.env.SERVER_URL = 'localhost';
-process.env.WS_PORT_MIN = '46800';
-process.env.WS_PORT_MAX = '46899';
-process.env.LISTEN_ATTEMPTS = '10';
-process.env.MAX_REGISTRATIONS = '3';
-process.env.PING_INTERVAL_MS = '100';
+// A device of the listing (Table C.80).
+type ListedDevice = { deviceId: string; url: string; supportedTypes: string[]; paired: boolean };
 
-const fake = createFakeRedis();
-const mqtt = createFakeMqtt();
+// The fields of the responses of C.6.15 the cases read; a field the response
+// lacks reads as undefined and fails the assertion.
+type ReplyBody = {
+    error: number;
+    description: string;
+    handle: string;
+    url: string;
+    sequence: number;
+    devices: ListedDevice[];
+};
 
-function stub(rel: string, exports: object): void {
-    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
-    const m = new Module(file);
-    m.filename = file;
-    m.loaded = true;
-    m.exports = { __esModule: true, ...exports };
-    require.cache[file] = m;
-}
-stub('redis-client', { default: fake.redis });
-stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
-
-/* eslint-disable @typescript-eslint/no-var-requires */
-const app = require('../src/app').default;
-const { startEntryServer, stopEntryServer, localEntryPointUrl } = require('../src/v100.0/modules/remote-device/entry-server');
-const { registries } = require('../src/v100.0/modules/remote-device/manager');
-const { startNotificationServer, stopNotificationServer } = require('../src/v100.0/modules/notifications/server');
-const { startProjection } = require('../src/v100.0/modules/remote-device/projection');
-/* eslint-enable @typescript-eslint/no-var-requires */
+type Reply = { status: number; apiVersion: string | null; json: ReplyBody };
 
 const PING_INTERVAL_MS = 100;
 const STATE_TOPIC = 'aop/application-lifecycle-manager/application-state';
@@ -51,18 +38,45 @@ const APP_B = { serviceContextId: 'urn:tv30:service:b', appId: 'app-b', origin: 
 // Writes session:current-app and publishes the change of state of the
 // application, as the Application Lifecycle Manager does
 const CURRENT_APP_KEY = 'session:current-app';
-const startApplication = (app: typeof APP_A) => {
-    fake.store.set(CURRENT_APP_KEY, { ...app });
-    return mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'started' }));
-};
-const endApplication = (app: typeof APP_A) => {
-    fake.store.delete(CURRENT_APP_KEY);
-    return mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'ended' }));
-};
+
 const VALID_BODY = { deviceClass: 'c', supportedTypes: ['t'] };
+
+// Class and identity of the client, as the edge writes them for the device
+// that registers itself.
+const DEVICE_CLIENT = { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-1' };
+
+const STAND_ALONE = { 'X-TV30-Client-Class': 'standAlone', 'X-TV30-Client-Id': 'cliente-1' };
+const OTHER_STAND_ALONE = { 'X-TV30-Client-Class': 'standAlone', 'X-TV30-Client-Id': 'cliente-2' };
+const ASSOCIATED = { 'X-TV30-Client-Class': 'associated' };
+
+// read when the modules load
+process.env.TV3WS_WS_TLS = 'false';
+
+process.env.SERVER_URL = 'localhost';
+process.env.WS_PORT_MIN = '46800';
+process.env.WS_PORT_MAX = '46899';
+process.env.LISTEN_ATTEMPTS = '10';
+process.env.MAX_REGISTRATIONS = '3';
+process.env.PING_INTERVAL_MS = '100';
+const fake = createFakeRedis();
+const mqtt = createFakeMqtt();
+stub('redis-client', { default: fake.redis });
+
+stub('mqtt-client', { default: mqtt.mqttClient, TOPICS, client: mqtt.client });
+
+/* eslint-disable @typescript-eslint/no-var-requires */
+
+const app = require('../src/app').default;
+const { startEntryServer, stopEntryServer, localEntryPointUrl } = require('../src/v100.0/modules/remote-device/entry-server');
+const { registries } = require('../src/v100.0/modules/remote-device/manager');
+const { startNotificationServer, stopNotificationServer } = require('../src/v100.0/modules/notifications/server');
+
+const { startProjection } = require('../src/v100.0/modules/remote-device/projection');
+/* eslint-enable @typescript-eslint/no-var-requires */
 
 let server: Server;
 let base = '';
+
 before(async () => {
     server = await new Promise<Server>((resolve) => {
         const s = app.listen(0, '127.0.0.1', () => resolve(s));
@@ -73,80 +87,22 @@ before(async () => {
     await startProjection();
     await startApplication(APP_A);
 });
+
 after(async () => {
     await stopEntryServer();
     await stopNotificationServer();
     await new Promise<void>((resolve) => server.close(() => resolve()));
 });
+
 beforeEach(() => {
     registries.clear();
 });
 
-type Reply = { status: number; apiVersion: string | null; json: any };
-
-// Class and identity of the client, as the edge writes them for the device
-// that registers itself.
-const DEVICE_CLIENT = { 'X-TV30-Client-Class': 'nonLocal', 'X-TV30-Client-Id': 'dispositivo-1' };
-
-async function call(method: string, route: string, body?: unknown, raw?: string): Promise<Reply> {
-    const init: RequestInit = { method, headers: DEVICE_CLIENT };
-    if (body !== undefined || raw !== undefined) {
-        init.headers = { 'Content-Type': 'application/json', ...DEVICE_CLIENT };
-        init.body = raw ?? JSON.stringify(body);
-    }
-    const res = await fetch(`${base}${route}`, init);
-    const text = await res.text();
-    return { status: res.status, apiVersion: res.headers.get('api-version'), json: text ? JSON.parse(text) : undefined };
-}
-
-const v100 = (route: string) => `/v100.0/tv3/remote-device${route}`;
-
-function expectError(r: Reply, code: number): void {
-    assert.equal(r.status, 404);
-    assert.equal(r.json?.error, code, JSON.stringify(r.json));
-    assert.equal(r.apiVersion, '100.0');
-}
-
-async function register(): Promise<{ handle: string; url: string }> {
-    const r = await call('POST', v100(''), VALID_BODY);
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    return r.json;
-}
-
 // Messages and close code of each socket, recorded from its creation, so
 // that nothing sent right after the upgrade is missed
 const received = new WeakMap<WebSocket, unknown[]>();
+
 const closed = new WeakMap<WebSocket, Promise<number>>();
-
-// Resolves with the open socket, or with the HTTP status of a refused upgrade
-function connect(url: string, options: { autoPong?: boolean } = {}): Promise<WebSocket | number> {
-    return new Promise((resolve, reject) => {
-        const ws = new WebSocket(url, options);
-        const messages: unknown[] = [];
-        received.set(ws, messages);
-        ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
-        closed.set(ws, new Promise((done) => ws.on('close', (code) => done(code))));
-        ws.on('open', () => resolve(ws));
-        ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
-        ws.on('error', reject);
-    });
-}
-
-async function open(url: string, options: { autoPong?: boolean } = {}): Promise<WebSocket> {
-    const result = await connect(url, options);
-    assert.ok(result instanceof WebSocket, `upgrade refused with HTTP ${result}`);
-    return result;
-}
-
-async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
-    const start = Date.now();
-    while (!condition()) {
-        assert.ok(Date.now() - start < timeoutMs, 'condition not reached in time');
-        await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-}
-
-const isConnected = (handle: string) => registries.getRegistryByHandle(handle)?.isConnected() === true;
 
 test('rotas fora da 100.0 dão 100, com API-Version 100.0 e sem o prefixo na descrição', async () => {
     expectError(await call('GET', v100('/device/x')), 100);
@@ -328,27 +284,6 @@ test('servidores de entrada: cada um aceita só o seu tipo de token; local é ws
     assert.equal(await connect(localTokenOnDevice), 404);
 });
 
-// Messages received by the socket, in order
-function inbox(ws: WebSocket): unknown[] {
-    return received.get(ws) ?? [];
-}
-
-function closeCode(ws: WebSocket): Promise<number> {
-    return closed.get(ws) ?? Promise.resolve(0);
-}
-
-// Registers and connects a device; returns its registry and socket
-async function connectedDevice(): Promise<{ handle: string; registry: any; device: WebSocket; deviceInbox: unknown[] }> {
-    const reg = await register();
-    const device = await open(reg.url);
-    const deviceInbox = inbox(device);
-    await waitFor(() => isConnected(reg.handle));
-    return { handle: reg.handle, registry: registries.getRegistryByHandle(reg.handle), device, deviceInbox };
-}
-
-const localUrlOf = (registry: any, clientId: string, clientType: string) =>
-    localEntryPointUrl(registries.addLocalEntryPoint(registry, clientId, clientType));
-
 test('par: forma na conexão local; o dispositivo recebe pairFormed (Figura C.8, Tabela C.86)', async () => {
     const { registry, deviceInbox } = await connectedDevice();
     const before = registries.getSequence('c');
@@ -405,7 +340,7 @@ test('par: associado sobre stand-alone transfere o par, na ordem da Tabela C.86,
         { event: 'pairEnded', clientType: 'standAlone' },
         { event: 'pairFormed', clientType: 'associated' },
     ]);
-    assert.equal(registry.getPair().clientType, 'associated');
+    assert.equal(registry.getPair()?.clientType, 'associated');
     assert.equal(registries.getSequence('c'), before);
 });
 
@@ -417,7 +352,7 @@ test('par: nova conexão do mesmo cliente substitui a anterior, sem mensagem ao 
     const firstClosed = closeCode(first);
     const second = await open(url);
     await firstClosed;
-    assert.equal(registry.getPair().ws !== undefined, true);
+    assert.equal(registry.getPair()?.ws !== undefined, true);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(deviceInbox.length, 1);
     assert.equal(second.readyState, WebSocket.OPEN);
@@ -508,21 +443,6 @@ test('fim do par: o DELETE do registro avisa o cliente com deviceUnavailable (40
     assert.deepEqual(inbox(client), [{ event: 'pairEnded', reason: 'deviceUnavailable' }]);
 });
 
-const STAND_ALONE = { 'X-TV30-Client-Class': 'standAlone', 'X-TV30-Client-Id': 'cliente-1' };
-const OTHER_STAND_ALONE = { 'X-TV30-Client-Class': 'standAlone', 'X-TV30-Client-Id': 'cliente-2' };
-const ASSOCIATED = { 'X-TV30-Client-Class': 'associated' };
-
-async function list(deviceClass: string, headers: Record<string, string>): Promise<Reply> {
-    const res = await fetch(`${base}${v100(`/devices/${deviceClass}`)}`, { headers });
-    return { status: res.status, apiVersion: res.headers.get('api-version'), json: await res.json() };
-}
-
-async function registerIn(deviceClass: string): Promise<{ handle: string; url: string }> {
-    const r = await call('POST', v100(''), { deviceClass, supportedTypes: ['application/x-ncl360'] });
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    return r.json;
-}
-
 test('listagem: classe sem dispositivo disponível responde só o sequence (Tabela C.80)', async () => {
     const r = await list('classe-vazia', STAND_ALONE);
     assert.equal(r.status, 200);
@@ -582,16 +502,6 @@ test('listagem: paired fica true com o par formado pela url listada', async () =
     assert.equal(r.json.sequence, registries.getSequence('lista-c'));
 });
 
-// Registers a listener of the remote-device event class and opens its
-// WebSocket; returns the events it receives
-async function listen(query = ''): Promise<unknown[]> {
-    const res = await fetch(`${base}/v100.0/tv3/notifications/remote-device${query}`, { headers: STAND_ALONE });
-    const reg = await res.json();
-    assert.equal(res.status, 200, JSON.stringify(reg));
-    const ws = await open(reg.url);
-    return inbox(ws);
-}
-
 test('eventos remote-device: available, pairFormed, pairEnded e unavailable, em ordem (C.6.15.6)', async () => {
     const events = await listen();
     const reg = await registerIn('eventos-a');
@@ -638,9 +548,6 @@ test('eventos remote-device: filtro classId; recusa e transferência não geram 
     assert.equal(elsewhere.length, 0);
 });
 
-// Projection of the registry in Redis (v100.0:remote-device:{handle})
-const projected = (handle: string) => fake.store.get(`v100.0:remote-device:${handle}`) as Record<string, string> | undefined;
-
 test('projeção no Redis: registro, conexão, par, queda e cancelamento, sem o token do ponto de entrada', async () => {
     const { handle, registry, device } = await connectedDevice();
     await waitFor(() => projected(handle)?.state === 'connected');
@@ -672,18 +579,18 @@ test('projeção no Redis: registro, conexão, par, queda e cancelamento, sem o 
 });
 
 test('projeção no Redis: recusa da função não muda a resposta da API; a gravação seguinte regrava tudo', async () => {
-    fake.recusar('tv30_v100_remote_device_write', 'TV30SCHEMA tv30_v100_remote_device_write: test refusal');
+    fake.refuse('tv30_v100_remote_device_write', 'TV30SCHEMA tv30_v100_remote_device_write: test refusal');
     try {
         const reg = await register();
         await new Promise((resolve) => setTimeout(resolve, 30));
         assert.equal(projected(reg.handle), undefined);
-        fake.recusar('tv30_v100_remote_device_write');
+        fake.refuse('tv30_v100_remote_device_write');
 
         await open(reg.url);
         await waitFor(() => projected(reg.handle)?.state === 'connected');
         assert.equal(projected(reg.handle)?.deviceClass, 'c');
     } finally {
-        fake.recusar('tv30_v100_remote_device_write');
+        fake.refuse('tv30_v100_remote_device_write');
     }
 });
 
@@ -768,3 +675,125 @@ test('fim da aplicacao associada: registros que ela fez sao removidos', async ()
     assert.equal(registries.getRegistryByHandle(reg.handle), undefined);
     await startApplication(APP_A);
 });
+
+function stub(rel: string, exports: object): void {
+    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
+    const m = new Module(file);
+    m.filename = file;
+    m.loaded = true;
+    m.exports = { __esModule: true, ...exports };
+    require.cache[file] = m;
+}
+
+const startApplication = (app: typeof APP_A) => {
+    fake.store.set(CURRENT_APP_KEY, { ...app });
+    return mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'started' }));
+};
+
+const endApplication = (app: typeof APP_A) => {
+    fake.store.delete(CURRENT_APP_KEY);
+    return mqtt.deliver(STATE_TOPIC, JSON.stringify({ ...app, state: 'ended' }));
+};
+
+async function call(method: string, route: string, body?: unknown, raw?: string): Promise<Reply> {
+    const init: RequestInit = { method, headers: DEVICE_CLIENT };
+    if (body !== undefined || raw !== undefined) {
+        init.headers = { 'Content-Type': 'application/json', ...DEVICE_CLIENT };
+        init.body = raw ?? JSON.stringify(body);
+    }
+    const res = await fetch(`${base}${route}`, init);
+    const text = await res.text();
+    const json: ReplyBody = text ? JSON.parse(text) : undefined;
+    return { status: res.status, apiVersion: res.headers.get('api-version'), json };
+}
+
+const v100 = (route: string) => `/v100.0/tv3/remote-device${route}`;
+
+function expectError(r: Reply, code: number): void {
+    assert.equal(r.status, 404);
+    assert.equal(r.json?.error, code, JSON.stringify(r.json));
+    assert.equal(r.apiVersion, '100.0');
+}
+
+async function register(): Promise<{ handle: string; url: string }> {
+    const r = await call('POST', v100(''), VALID_BODY);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    return r.json;
+}
+
+// Resolves with the open socket, or with the HTTP status of a refused upgrade
+function connect(url: string, options: { autoPong?: boolean } = {}): Promise<WebSocket | number> {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(url, options);
+        const messages: unknown[] = [];
+        received.set(ws, messages);
+        ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
+        closed.set(ws, new Promise((done) => ws.on('close', (code) => done(code))));
+        ws.on('open', () => resolve(ws));
+        ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+        ws.on('error', reject);
+    });
+}
+
+async function open(url: string, options: { autoPong?: boolean } = {}): Promise<WebSocket> {
+    const result = await connect(url, options);
+    assert.ok(result instanceof WebSocket, `upgrade refused with HTTP ${result}`);
+    return result;
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (!condition()) {
+        assert.ok(Date.now() - start < timeoutMs, 'condition not reached in time');
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}
+
+const isConnected = (handle: string) => registries.getRegistryByHandle(handle)?.isConnected() === true;
+
+// Messages received by the socket, in order
+function inbox(ws: WebSocket): unknown[] {
+    return received.get(ws) ?? [];
+}
+
+function closeCode(ws: WebSocket): Promise<number> {
+    return closed.get(ws) ?? Promise.resolve(0);
+}
+
+// Registers and connects a device; returns its registry and socket
+async function connectedDevice(): Promise<{ handle: string; registry: Registry; device: WebSocket; deviceInbox: unknown[] }> {
+    const reg = await register();
+    const device = await open(reg.url);
+    const deviceInbox = inbox(device);
+    await waitFor(() => isConnected(reg.handle));
+    const registry = registries.getRegistryByHandle(reg.handle);
+    assert.ok(registry, `registry of ${reg.handle}`);
+    return { handle: reg.handle, registry, device, deviceInbox };
+}
+
+const localUrlOf = (registry: Registry, clientId: string, clientType: string) =>
+    localEntryPointUrl(registries.addLocalEntryPoint(registry, clientId, clientType));
+
+async function list(deviceClass: string, headers: Record<string, string>): Promise<Reply> {
+    const res = await fetch(`${base}${v100(`/devices/${deviceClass}`)}`, { headers });
+    return { status: res.status, apiVersion: res.headers.get('api-version'), json: await res.json() };
+}
+
+async function registerIn(deviceClass: string): Promise<{ handle: string; url: string }> {
+    const r = await call('POST', v100(''), { deviceClass, supportedTypes: ['application/x-ncl360'] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    return r.json;
+}
+
+// Registers a listener of the remote-device event class and opens its
+// WebSocket; returns the events it receives
+async function listen(query = ''): Promise<unknown[]> {
+    const res = await fetch(`${base}/v100.0/tv3/notifications/remote-device${query}`, { headers: STAND_ALONE });
+    const reg = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(reg));
+    const ws = await open(reg.url);
+    return inbox(ws);
+}
+
+// Projection of the registry in Redis (v100.0:remote-device:{handle})
+const projected = (handle: string) => fake.store.get(`v100.0:remote-device:${handle}`) as Record<string, string> | undefined;

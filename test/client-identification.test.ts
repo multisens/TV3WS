@@ -6,6 +6,7 @@
 // non-local client stored only on the /tv3/token that checks the challenge
 // (C.4.2.3).
 import { test, before, after, beforeEach } from 'node:test';
+
 import assert from 'node:assert/strict';
 import Module from 'module';
 import path from 'path';
@@ -14,24 +15,36 @@ import { Server } from 'http';
 import { randomUUID, randomBytes, createHash, createCipheriv, createDecipheriv, createECDH } from 'crypto';
 import express from 'express';
 import { createFakeRedis } from './helpers/fake-redis';
+import { ApiJson } from './helpers/api-json';
 import './helpers/jwt-env';
+
+type NonLocal = { cid: string; secret: Buffer; cr: string; plain: Buffer };
+
+const HTTPS = { 'x-teste-https': '1' };
 
 // --- doubles -----------------------------------------------------------------
 const fake = createFakeRedis();
+
 const fakeRedis = fake.redis;
 const store = fake.store;
-const members = (k: string) => [...((store.get(k) as Set<string> | undefined) ?? [])];
 
 // Answer of the "viewer" to the authorization pop-up, and count of pop-ups.
 let viewerAnswer = true;
+
 let yesNoPopUps = 0;
+
 // PINs tv3ws sent the TV to show (pm=kex).
 const pins: string[] = [];
+
 // Keys tv3ws sent the TV to show in the QR code (pm=qrcode).
 const qrKeys: string[] = [];
+
 // The pop-ups publish nothing (no MQTT).
 const fakeCore = {
-    async showYesNoPopUpAsync(_msg: string, _timeout: number) { yesNoPopUps++; return viewerAnswer; },
+    async showYesNoPopUpAsync(_msg: string, _timeout: number) {
+        yesNoPopUps++;
+        return viewerAnswer;
+    },
     showQRCodePopUp(key: string, _timeout: number) { qrKeys.push(key); },
     showPINPopUp(pin: string, _timeout: number) { pins.push(pin); },
     // Closing at the end of the pairing (checked in pairing-popup.test.ts).
@@ -39,25 +52,21 @@ const fakeCore = {
     closePINPopUp() { },
 };
 
-function stub(rel: string, exports: object): void {
-    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
-    const m = new Module(file);
-    m.filename = file;
-    m.loaded = true;
-    m.exports = { __esModule: true, ...exports };
-    require.cache[file] = m;
-}
 stub('redis-client', { default: fakeRedis });
 stub('core', { ...fakeCore, default: fakeCore });
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const router = require('../src/api/client-identification').default;
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const manager = require('../src/modules/auth-manager/manager') as typeof import('../src/modules/auth-manager/manager');
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { errorHandler } = require('../src/util') as typeof import('../src/util');
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { _layerForTests } = require('../src/api/client-identification/service') as typeof import('../src/api/client-identification/service');
+
 // The QR code or PIN on screen makes the next /tv3/authorize get 103, and
 // several cases here leave the pairing open: each case starts with the layer
 // free (the 103 cases are in pairing-popup.test.ts).
@@ -65,13 +74,17 @@ beforeEach(() => _layerForTests.clear());
 
 // --- server ------------------------------------------------------------------
 let server: Server;
+
 let base = '';
+
 before(async () => {
     const app = express();
     // x-teste-https: req.protocol is 'https' (arrival by HTTPS, which this test
     // server does not have).
     app.use((req, _res, next) => {
-        if (req.get('x-teste-https')) Object.defineProperty(req, 'protocol', { value: 'https' });
+        if (req.get('x-teste-https')) {
+            Object.defineProperty(req, 'protocol', { value: 'https' });
+        }
         next();
     });
     app.use('/tv3', router);
@@ -80,27 +93,16 @@ before(async () => {
     server = await new Promise<Server>(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/tv3`;
 });
+
 after(() => new Promise<void>(resolve => server.close(() => resolve())));
 
-async function get(route: string, query: Record<string, string>, headers: Record<string, string> = {}) {
-    const res = await fetch(`${base}${route}?${new URLSearchParams(query)}`, { headers });
-    const text = await res.text();
-    return { status: res.status, type: res.headers.get('content-type') ?? '', json: text ? JSON.parse(text) : undefined };
-}
-const authorize = (clientid: string, extra: Record<string, string> = {}, headers: Record<string, string> = {}) =>
-    get('/authorize', { clientid, 'display-name': 'teste', ...extra }, headers);
-const expectError = (r: { status: number; type: string; json: any }, code: number) => {
-    assert.equal(r.status, 404);
-    assert.match(r.type, /application\/json/);
-    assert.equal(r.json.error, code, JSON.stringify(r.json));
-    assert.equal(typeof r.json.description, 'string');
-};
-// Pop-ups opened during fn (the 101 must not prompt the viewer).
-async function popUpsDuring(fn: () => Promise<void>): Promise<number> {
-    const before = yesNoPopUps;
-    await fn();
-    return yesNoPopUps - before;
-}
+// --- secret comparison: bytes, crypto.timingSafeEqual, different length
+// fails ---
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ClientClass = require('../src/modules/auth-manager/client').default as typeof import('../src/modules/auth-manager/client').default;
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const cryptoModule = require('crypto') as typeof import('crypto');
 
 // --- cases -------------------------------------------------------------------
 test('local autonomo: primeira autorizacao da refreshToken; reuso do clientid da 101 sem pop-up', async () => {
@@ -307,12 +309,12 @@ test('autorizar, recusar, emitir token e incluir no boot saem por FCALL das func
     assert.equal(first.status, 200);
     const tok = await get('/token', { clientid: cid, 'refresh-token': first.json.refreshToken });
     assert.equal(tok.status, 200, JSON.stringify(tok.json));
-    const nomes = fake.fcalls.map(c => c[0]);
-    assert.deepEqual(nomes.filter(n => n === 'tv30_client_authorize').length, 1);
-    assert.ok(nomes.includes('tv30_client_write'), 'rotacao/emissao gravam client:{id} pela funcao');
-    const autoriza = fake.fcalls.find(c => c[0] === 'tv30_client_authorize')!;
-    assert.equal(autoriza[1], cid);
-    assert.deepEqual(autoriza.slice(2).filter((_, i) => i % 2 === 0), ['class', 'refreshToken'], 'campos em ordem estavel, sem accessToken antes do /token');
+    const fnNames = fake.fcalls.map(c => c[0]);
+    assert.deepEqual(fnNames.filter(n => n === 'tv30_client_authorize').length, 1);
+    assert.ok(fnNames.includes('tv30_client_write'), 'rotacao/emissao gravam client:{id} pela funcao');
+    const authorizeCall = fake.fcalls.find(c => c[0] === 'tv30_client_authorize')!;
+    assert.equal(authorizeCall[1], cid);
+    assert.deepEqual(authorizeCall.slice(2).filter((_, i) => i % 2 === 0), ['class', 'refreshToken'], 'campos em ordem estavel, sem accessToken antes do /token');
 
     viewerAnswer = false;
     const no = randomUUID();
@@ -325,7 +327,7 @@ test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora 
     viewerAnswer = true;
     const cid = randomUUID();
     const msg = 'TV30SCHEMA tv30_client_authorize: client:x field class: must be one of associated, standAlone, nonLocal';
-    fake.recusar('tv30_client_authorize', msg);
+    fake.refuse('tv30_client_authorize', msg);
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
@@ -333,7 +335,7 @@ test('autorizacao recusada pela funcao (esquema): 404 {error:200}, cliente fora 
         expectError(r, 200);
         assert.ok(r.json.description.includes(msg), r.json.description);
     } finally {
-        fake.recusar('tv30_client_authorize');
+        fake.refuse('tv30_client_authorize');
         console.error = errorOrig;
     }
     assert.ok(!members('clients:authorized').includes(cid));
@@ -353,51 +355,6 @@ test('Redis fora do ar: /authorize e /token respondem 404 {error:200}, sem pop-u
         fake.setDown(false);
     }
 });
-
-// --- empty parameter and single-use challenge -------------------------------
-// An empty or blank value counts as absent (105, Tables C.3 and C.4); after
-// the success by challenge-response, a repetition gives 102 (Table C.4).
-const sha = (b: Buffer) => createHash('sha256').update(b).digest();
-const aes = (enc: boolean, k: Buffer, d: Buffer) => {
-    const c = enc ? createCipheriv('aes-128-ecb', k, null) : createDecipheriv('aes-128-ecb', k, null);
-    return Buffer.concat([c.update(d), c.final()]);
-};
-
-// GET with a hand-written query (to send an empty "refresh-token=" etc.).
-async function getRaw(route: string, rawQuery: string, headers: Record<string, string> = {}) {
-    const res = await fetch(`${base}${route}?${rawQuery}`, { headers });
-    const type = res.headers.get('content-type') ?? '';
-    const raw = Buffer.from(await res.arrayBuffer());
-    return { status: res.status, type, raw, json: /json/.test(type) ? JSON.parse(raw.toString('utf8')) : undefined };
-}
-const HTTPS = { 'x-teste-https': '1' };
-
-type NonLocal = { cid: string; secret: Buffer; cr: string; plain: Buffer };
-
-// /tv3/authorize of a non-local client and the solution of the challenge
-// (Table C.4), without calling /tv3/token.
-async function pairNonLocal(pm: 'qrcode' | 'kex', cid: string = randomUUID()): Promise<NonLocal> {
-    viewerAnswer = true;
-    const ecdh = createECDH('prime256v1');
-    const extra: Record<string, string> = { pm };
-    if (pm === 'kex') {
-        ecdh.generateKeys();
-        extra.key = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
-    }
-    const r = await authorize(cid, extra);
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    const secret = pm === 'qrcode'
-        ? sha(Buffer.from(qrKeys[qrKeys.length - 1], 'base64url')).subarray(0, 16)
-        : sha(ecdh.computeSecret(Buffer.from(r.json.key, 'base64url'))).subarray(0, 16);
-    const plain = aes(false, secret, Buffer.from(r.json.challenge, 'base64url'));
-    return { cid, secret, cr: aes(true, secret, sha(plain)).toString('base64url'), plain };
-}
-const tokenByChallenge = (p: NonLocal, headers: Record<string, string> = {}) =>
-    getRaw('/token', `clientid=${p.cid}&challenge-response=${p.cr}`, headers);
-const notStored = (cid: string) => {
-    assert.equal(store.has(`client:${cid}`), false, `client:${cid} gravado`);
-    assert.ok(!members('clients:authorized').includes(cid), `${cid} em clients:authorized`);
-};
 
 // --- the yes of a non-local client: memory only until the challenge-response
 // is checked (C.4.2.3) ---
@@ -424,9 +381,9 @@ for (const pm of ['qrcode', 'kex'] as const) {
         assert.equal(typeof JSON.parse(aes(false, p2!.secret, ok.raw).toString('utf8')).accessToken, 'string');
         assert.ok(members('clients:authorized').includes(p.cid));
         assert.equal((store.get(`client:${p.cid}`) as Record<string, string>).class, 'nonLocal');
-        const autoriza = fake.fcalls.filter(c => c[0] === 'tv30_client_authorize');
-        assert.equal(autoriza.length, 1);
-        assert.deepEqual(autoriza[0].slice(1, 4), [p.cid, 'class', 'nonLocal']);
+        const authorizeCall = fake.fcalls.filter(c => c[0] === 'tv30_client_authorize');
+        assert.equal(authorizeCall.length, 1);
+        assert.deepEqual(authorizeCall[0].slice(1, 4), [p.cid, 'class', 'nonLocal']);
     });
 
     test(`pm=${pm}: pareamento concluido: reuso do clientid da 101 sem pop-up, com ou sem pm`, async () => {
@@ -466,7 +423,7 @@ test('nao local com tentativa pendente: o novo pedido recusado no pop-up bloquei
 test('gravacao da autorizacao recusada no /tv3/token: 404 {error:200} sem credencial e sem registro; o material volta e o mesmo challenge-response conclui', async () => {
     const p = await pairNonLocal('kex');
     const msg = 'TV30SCHEMA tv30_client_authorize: test refusal';
-    fake.recusar('tv30_client_authorize', msg);
+    fake.refuse('tv30_client_authorize', msg);
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
@@ -475,7 +432,7 @@ test('gravacao da autorizacao recusada no /tv3/token: 404 {error:200} sem creden
         assert.equal(r.json.accessToken, undefined);
         assert.ok(r.json.description.includes(msg), r.json.description);
     } finally {
-        fake.recusar('tv30_client_authorize');
+        fake.refuse('tv30_client_authorize');
         console.error = errorOrig;
     }
     notStored(p.cid);
@@ -565,7 +522,9 @@ for (const pm of ['qrcode', 'kex'] as const) {
         assert.equal(client.hasPendingChallenge(), false);
         assert.throws(() => client.getSecret(), /no pairing secret/);
         assert.equal(client.getChallenge(), undefined);
-        if (pm === 'kex') assert.throws(() => client.getECDHPublicKey(), /no ECDH key pair/);
+        if (pm === 'kex') {
+            assert.throws(() => client.getECDHPublicKey(), /no ECDH key pair/);
+        }
 
         // The repetition, over HTTP and over HTTPS.
         for (const h of [{}, HTTPS]) {
@@ -592,7 +551,10 @@ test('dois /tv3/token simultaneos com o mesmo challenge-response: so um emite cr
     // A slow write to storage: the second /tv3/token is checked while the
     // first one still issues the credential.
     const call = fakeRedis.call;
-    fakeRedis.call = async (...a: unknown[]) => { await new Promise(r => setTimeout(r, 50)); return call(...a); };
+    fakeRedis.call = async (...a: unknown[]) => {
+        await new Promise(r => setTimeout(r, 50));
+        return call(...a);
+    };
     try {
         const rs = await Promise.all([tokenByChallenge(p), tokenByChallenge(p)]);
         assert.deepEqual(rs.map(r => r.status).sort(), [200, 404]);
@@ -604,34 +566,18 @@ test('dois /tv3/token simultaneos com o mesmo challenge-response: so um emite cr
 
 test('emissao falha depois do desafio conferido: o material volta, o mesmo challenge-response conclui e depois nao vale mais', async () => {
     const p = await pairNonLocal('qrcode');
-    fake.recusar('tv30_client_write', 'TV30SCHEMA tv30_client_write: test refusal');
+    fake.refuse('tv30_client_write', 'TV30SCHEMA tv30_client_write: test refusal');
     const errorOrig = console.error;
     console.error = () => undefined;
     try {
         expectError(await tokenByChallenge(p), 200);
     } finally {
-        fake.recusar('tv30_client_write');
+        fake.refuse('tv30_client_write');
         console.error = errorOrig;
     }
     assert.equal((await tokenByChallenge(p)).status, 200);
     expectError(await tokenByChallenge(p), 102);
 });
-
-// --- secret comparison: bytes, crypto.timingSafeEqual, different length
-// fails ---
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const ClientClass = require('../src/modules/auth-manager/client').default as typeof import('../src/modules/auth-manager/client').default;
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const cryptoModule = require('crypto') as typeof import('crypto');
-
-// Counts the calls of crypto.timingSafeEqual during fn.
-function timingSafeCalls(fn: () => void): number {
-    const orig = cryptoModule.timingSafeEqual;
-    let calls = 0;
-    cryptoModule.timingSafeEqual = ((a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => { calls++; return orig(a, b); }) as typeof orig;
-    try { fn(); } finally { cryptoModule.timingSafeEqual = orig; }
-    return calls;
-}
 
 test('Client.validateRefreshToken: igual vale, diferente ou de outro tamanho nao (sem lancar), lista nao; tempo constante', () => {
     const c = new ClientClass(randomUUID());
@@ -717,28 +663,27 @@ test('refresh-token de outro tamanho ou repetido: 101, e o legitimo segue valend
     assert.equal(ok.status, 200, JSON.stringify(ok.json));
 });
 
-// --- a challenge-response that does not decrypt (invalid block or PKCS#7
-// padding, list) ---
-// 102 with the same response as a wrong hash (Table C.4), no credential, and
-// the attempt stays open.
-const aesRaw = (k: Buffer, d: Buffer) => {
-    const c = createCipheriv('aes-128-ecb', k, null);
-    c.setAutoPadding(false);
-    return Buffer.concat([c.update(d), c.final()]);
-};
-
 for (const pm of ['qrcode', 'kex'] as const) {
     test(`pm=${pm}: challenge-response que nao decifra ou repetido: 102 igual ao do hash errado, sem credencial; a solucao certa conclui depois`, async () => {
         const p = await pairNonLocal(pm);
         const b64 = (b: Buffer) => b.toString('base64url');
-        const lastByte = (v: number) => { const b = randomBytes(32); b[31] = v; return b; };
+        const lastByte = (v: number) => {
+            const b = randomBytes(32);
+            b[31] = v;
+            return b;
+        };
+        const wrongPenultimate = () => {
+            const b = lastByte(0x02);
+            b[30] = 0x05;
+            return b;
+        };
         const malformed: [string, string][] = [
             ['15 bytes (nao e multiplo de 16)', b64(randomBytes(15))],
             ['33 bytes', b64(Buffer.concat([Buffer.from(p.cr, 'base64url'), Buffer.from([0])]))],
             ['1 byte', b64(Buffer.from([7]))],
             ['padding 0x00', b64(aesRaw(p.secret, lastByte(0x00)))],
             ['padding 0x11 (maior que o bloco)', b64(aesRaw(p.secret, lastByte(0x11)))],
-            ['padding 0x02 com o penultimo byte errado', b64(aesRaw(p.secret, (() => { const b = lastByte(0x02); b[30] = 0x05; return b; })()))],
+            ['padding 0x02 com o penultimo byte errado', b64(aesRaw(p.secret, wrongPenultimate()))],
             ['so caracteres fora do base64 (decodifica vazio)', '!!!!'],
             ['repetido (lista)', `${p.cr}&challenge-response=${p.cr}`],
         ];
@@ -761,3 +706,108 @@ for (const pm of ['qrcode', 'kex'] as const) {
         expectError(await tokenByChallenge(p), 102);
     });
 }
+
+const members = (k: string) => [...((store.get(k) as Set<string> | undefined) ?? [])];
+
+function stub(rel: string, exports: object): void {
+    const file = require.resolve(path.join(__dirname, '..', 'src', rel));
+    const m = new Module(file);
+    m.filename = file;
+    m.loaded = true;
+    m.exports = { __esModule: true, ...exports };
+    require.cache[file] = m;
+}
+
+async function get(route: string, query: Record<string, string>, headers: Record<string, string> = {}) {
+    const res = await fetch(`${base}${route}?${new URLSearchParams(query)}`, { headers });
+    const text = await res.text();
+    return { status: res.status, type: res.headers.get('content-type') ?? '', json: text ? JSON.parse(text) : undefined };
+}
+
+const authorize = (clientid: string, extra: Record<string, string> = {}, headers: Record<string, string> = {}) =>
+    get('/authorize', { clientid, 'display-name': 'teste', ...extra }, headers);
+
+const expectError = (r: { status: number; type: string; json: ApiJson }, code: number) => {
+    assert.equal(r.status, 404);
+    assert.match(r.type, /application\/json/);
+    assert.equal(r.json.error, code, JSON.stringify(r.json));
+    assert.equal(typeof r.json.description, 'string');
+};
+
+// Pop-ups opened during fn (the 101 must not prompt the viewer).
+async function popUpsDuring(fn: () => Promise<void>): Promise<number> {
+    const before = yesNoPopUps;
+    await fn();
+    return yesNoPopUps - before;
+}
+
+// --- empty parameter and single-use challenge -------------------------------
+// An empty or blank value counts as absent (105, Tables C.3 and C.4); after
+// the success by challenge-response, a repetition gives 102 (Table C.4).
+const sha = (b: Buffer) => createHash('sha256').update(b).digest();
+
+const aes = (enc: boolean, k: Buffer, d: Buffer) => {
+    const c = enc ? createCipheriv('aes-128-ecb', k, null) : createDecipheriv('aes-128-ecb', k, null);
+    return Buffer.concat([c.update(d), c.final()]);
+};
+
+// GET with a hand-written query (to send an empty "refresh-token=" etc.).
+async function getRaw(route: string, rawQuery: string, headers: Record<string, string> = {}) {
+    const res = await fetch(`${base}${route}?${rawQuery}`, { headers });
+    const type = res.headers.get('content-type') ?? '';
+    const raw = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, type, raw, json: /json/.test(type) ? JSON.parse(raw.toString('utf8')) : undefined };
+}
+
+// /tv3/authorize of a non-local client and the solution of the challenge
+// (Table C.4), without calling /tv3/token.
+async function pairNonLocal(pm: 'qrcode' | 'kex', cid: string = randomUUID()): Promise<NonLocal> {
+    viewerAnswer = true;
+    const ecdh = createECDH('prime256v1');
+    const extra: Record<string, string> = { pm };
+    if (pm === 'kex') {
+        ecdh.generateKeys();
+        extra.key = ecdh.getPublicKey(null, 'uncompressed').toString('base64url');
+    }
+    const r = await authorize(cid, extra);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const secret = pm === 'qrcode'
+        ? sha(Buffer.from(qrKeys[qrKeys.length - 1], 'base64url')).subarray(0, 16)
+        : sha(ecdh.computeSecret(Buffer.from(r.json.key, 'base64url'))).subarray(0, 16);
+    const plain = aes(false, secret, Buffer.from(r.json.challenge, 'base64url'));
+    return { cid, secret, cr: aes(true, secret, sha(plain)).toString('base64url'), plain };
+}
+
+const tokenByChallenge = (p: NonLocal, headers: Record<string, string> = {}) =>
+    getRaw('/token', `clientid=${p.cid}&challenge-response=${p.cr}`, headers);
+
+const notStored = (cid: string) => {
+    assert.equal(store.has(`client:${cid}`), false, `client:${cid} gravado`);
+    assert.ok(!members('clients:authorized').includes(cid), `${cid} em clients:authorized`);
+};
+
+// Counts the calls of crypto.timingSafeEqual during fn.
+function timingSafeCalls(fn: () => void): number {
+    const orig = cryptoModule.timingSafeEqual;
+    let calls = 0;
+    cryptoModule.timingSafeEqual = ((a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => {
+        calls++;
+        return orig(a, b);
+    }) as typeof orig;
+    try {
+        fn();
+    } finally {
+        cryptoModule.timingSafeEqual = orig;
+    }
+    return calls;
+}
+
+// --- a challenge-response that does not decrypt (invalid block or PKCS#7
+// padding, list) ---
+// 102 with the same response as a wrong hash (Table C.4), no credential, and
+// the attempt stays open.
+const aesRaw = (k: Buffer, d: Buffer) => {
+    const c = createCipheriv('aes-128-ecb', k, null);
+    c.setAutoPadding(false);
+    return Buffer.concat([c.update(d), c.final()]);
+};
