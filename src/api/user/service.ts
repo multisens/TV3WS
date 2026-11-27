@@ -111,8 +111,23 @@ function matchExpression(fields: Record<string, string>, expr: Expression): bool
     }
 }
 
+// C.6.14.3 (Table C.72): 300 without a DTV service in use, 405 for a current
+// profile not visible to the current service; without a current profile,
+// an empty id.
 async function getCurrentUser(): Promise<string> {
-    return await readCurrentUser();
+    const currentService = await readCurrentService();
+    if (!currentService) {
+        throw new ApiError(300);
+    }
+    const currentUser = await readCurrentUser();
+    if (!currentUser) {
+        return '';
+    }
+    const visible = await isUserVisible(currentUser, currentService);
+    if (!visible) {
+        throw new ApiError(405);
+    }
+    return currentUser;
 }
 
 // C.6.14.4 (Table C.73): 300 without a DTV service in use, 305 for a
@@ -191,10 +206,16 @@ async function assertUserVisible(uuid: string, scid: string): Promise<void> {
         throw new ApiError(305, `user ${uuid} does not exist`);
     }
 
-    const hasConsent = await redis.sismember(`user:${uuid}:consent`, scid);
-    if (!hasConsent) {
+    const visible = await isUserVisible(uuid, scid);
+    if (!visible) {
         throw new ApiError(405);
     }
+}
+
+// Whether the profile is visible to the service (user:{id}:consent).
+async function isUserVisible(uuid: string, scid: string): Promise<boolean> {
+    const hasConsent = await redis.sismember(`user:${uuid}:consent`, scid);
+    return hasConsent === 1;
 }
 
 // C.6.14.2: an attribute in the query (the key is the name; also

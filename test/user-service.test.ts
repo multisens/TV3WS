@@ -128,6 +128,22 @@ test('POST current-user (Tabela C.73): 305 para id inexistente, 405 sem acesso, 
     assert.equal(published.length, antes);
 });
 
+test('GET current-user (Table C.72): the visible profile, 405 without access, empty id without a current profile, 300 without a service', async () => {
+    seedProfiles('svc-a');
+    store.set('session:current-user', U1);
+    const visible = await call('GET', '/current-service/users/current-user');
+    assert.equal(visible.status, 200, visible.text);
+    assert.deepEqual(visible.json, { id: U1 });
+    store.set(`user:${U1}:consent`, new Set(['svc-b']));
+    expectError(await call('GET', '/current-service/users/current-user'), 405);
+    store.delete('session:current-user');
+    const none = await call('GET', '/current-service/users/current-user');
+    assert.equal(none.status, 200, none.text);
+    assert.deepEqual(none.json, { id: '' });
+    store.delete('session:current-service-id');
+    expectError(await call('GET', '/current-service/users/current-user'), 300);
+});
+
 // --- Redis failure ----------------------------------------------------------
 test('Redis normal: a listagem C.6.14.1 devolve o perfil visivel', async () => {
     seedProfiles('svc-a');
