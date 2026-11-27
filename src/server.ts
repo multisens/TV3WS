@@ -9,7 +9,6 @@ import { backfillAuthorizedClients } from './modules/auth-manager/manager';
 import { startEntryServer } from './v100.0/modules/remote-device/entry-server';
 import { startProjection } from './v100.0/modules/remote-device/projection';
 import { startNotificationServer } from './v100.0/modules/notifications/server';
-import { loadAdvertisedEndpoint, registerManifest } from './manifest';
 import { listenHosts } from './listen-hosts';
 import { tlsMaterial } from './tls';
 import { positiveIntFromEnv } from './util';
@@ -70,9 +69,6 @@ whenRedisReady('cleanup of the v100.0 remote-devices projection', startProjectio
 connectRedis();
 
 void startV100Servers();
-
-// /manifest (C.3.4). An invalid edge port stops the process at startup.
-registerManifest(app, loadAdvertisedEndpoint());
 
 const hosts = listenHosts();
 startHttp(hosts);
