@@ -1,37 +1,16 @@
 import { Request, Response } from 'express';
-import core from '../../../core';
 import { returnError } from '../../../util';
-import { integerServiceId } from '../../../util/service-id';
+import { readCurrentService } from './service';
 
-type CurrentServiceResponse = {
-    serviceContextId: string;
-    serviceName?: string;
-    transportStreamId: string;
-    originalNetworkId: string;
-    serviceId?: number;
-};
-
-// ABNT NBR 25608, C.6.3.1, Table C.8. The service in use is the last value
-// of aop/currentService; empty or never received gives 300. A serviceId
-// without a known integer value is omitted (C.3.2.2). Error 302 is not
-// emitted.
-function GETCurrentService(req: Request, res: Response): void {
-    if (core.current.serviceContextId === '') {
+// ABNT NBR 25608, C.6.3.1, Table C.8. The service in use is the one of the
+// session; without one, 300. Error 302 is not emitted.
+async function GETCurrentService(req: Request, res: Response): Promise<void> {
+    const service = await readCurrentService();
+    if (service === undefined) {
         returnError(res, 300);
         return;
     }
-
-    const body: CurrentServiceResponse = {
-        serviceContextId: core.current.serviceContextId,
-        serviceName: core.current.serviceName || undefined,
-        transportStreamId: core.current.transportStreamId,
-        originalNetworkId: core.current.originalNetworkId,
-    };
-    const serviceId = integerServiceId(core.current.serviceId);
-    if (serviceId !== undefined) {
-        body.serviceId = serviceId;
-    }
-    res.status(200).json(body);
+    res.status(200).json(service);
 }
 
 export default { GETCurrentService };

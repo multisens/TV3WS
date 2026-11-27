@@ -1,6 +1,7 @@
 // GET /tv3/current-service (ABNT NBR 25608, C.6.3.1, Table C.8) through the
-// whole app.ts, with the real core and Redis and MQTT by doubles: 300 when
-// there is no service in use, and "serviceId" omitted without an SLT.
+// whole app.ts, with Redis and MQTT by doubles: the fields of the session the
+// AoP writes; 300 without a service in use; "serviceId" and "serviceName"
+// omitted for a service outside the catalog.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'module';
@@ -43,7 +44,17 @@ async function get(headers: Record<string, string> = {}) {
 }
 const SVC = 'urn:tv30:service:teste';
 
-test('sem servico em uso (aop/currentService nunca recebido): 404 {error:300} com API-Version', async () => {
+// The session as the AoP writes it (tv30_session_service).
+function selecionar(campos: Record<string, string>): void {
+    fake.store.set('session:current-service', { serviceContextId: SVC, serviceName: '', serviceId: '', ...campos });
+    fake.store.set('session:current-service-id', campos.serviceContextId ?? SVC);
+}
+function desfazer(): void {
+    fake.store.delete('session:current-service');
+    fake.store.set('session:current-service-id', '');
+}
+
+test('sem servico em uso (sessao sem session:current-service): 404 {error:300} com API-Version', async () => {
     const r = await get();
     assert.equal(r.status, 404);
     assert.match(r.type, /application\/json/);
@@ -52,24 +63,53 @@ test('sem servico em uso (aop/currentService nunca recebido): 404 {error:300} co
     assert.equal(r.apiVersion, '2.0');
 });
 
-test('servico em uso sem @serviceId conhecido: 200, sem "serviceId" (nem "-1"/"undefined" em texto)', async () => {
-    await mqtt.deliver(TOPICS.current_service, SVC);
-    const r = await get();
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(r.apiVersion, '2.0');
-    assert.equal(typeof r.json.serviceContextId, 'string');
-    assert.ok(!('serviceId' in r.json), JSON.stringify(r.json));
-    assert.ok(!('serviceName' in r.json), 'nome vazio e omitido (C.3.2.2)');
+test('servico do catalogo: os tres campos da Tabela C.8, serviceId inteiro', async () => {
+    selecionar({ serviceName: 'Canal Teste', serviceId: '1001' });
+    try {
+        const r = await get();
+        assert.equal(r.status, 200, JSON.stringify(r.json));
+        assert.equal(r.apiVersion, '2.0');
+        assert.deepEqual(r.json, { serviceContextId: SVC, serviceName: 'Canal Teste', serviceId: 1001 });
+    } finally {
+        desfazer();
+    }
 });
 
-test('version 100.0: the service in use follows without "serviceId" and "serviceName"', async () => {
-    await mqtt.deliver(TOPICS.current_service, SVC);
-    const r = await get({ 'X-TV30-API-Version': '100.0' });
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(r.apiVersion, '100.0');
-    assert.equal(r.json.serviceContextId, SVC);
-    assert.ok(!('serviceId' in r.json) && !('serviceName' in r.json), JSON.stringify(r.json));
-    await mqtt.deliver(TOPICS.current_service, '');
+test('servico fora do catalogo: sem "serviceId" e sem "serviceName" (C.3.2.2)', async () => {
+    selecionar({});
+    try {
+        const r = await get();
+        assert.equal(r.status, 200, JSON.stringify(r.json));
+        assert.deepEqual(r.json, { serviceContextId: SVC });
+    } finally {
+        desfazer();
+    }
+});
+
+test('o id decide: sem id, 300 mesmo com hash; hash de outro servico, so o serviceContextId', async () => {
+    fake.store.set('session:current-service', { serviceContextId: 'urn:tv30:service:antigo', serviceName: 'Antigo', serviceId: '9' });
+    fake.store.set('session:current-service-id', '');
+    try {
+        assert.equal((await get()).json.error, 300);
+        fake.store.set('session:current-service-id', SVC);
+        const r = await get();
+        assert.equal(r.status, 200, JSON.stringify(r.json));
+        assert.deepEqual(r.json, { serviceContextId: SVC });
+    } finally {
+        desfazer();
+    }
+});
+
+test('version 100.0: the same fields of the session', async () => {
+    selecionar({ serviceName: 'Canal Teste', serviceId: '7' });
+    try {
+        const r = await get({ 'X-TV30-API-Version': '100.0' });
+        assert.equal(r.status, 200, JSON.stringify(r.json));
+        assert.equal(r.apiVersion, '100.0');
+        assert.deepEqual(r.json, { serviceContextId: SVC, serviceName: 'Canal Teste', serviceId: 7 });
+    } finally {
+        desfazer();
+    }
 });
 
 test('integerServiceId (Tabela C.8): inteiro >= 0, em numero ou texto so de digitos; o resto sem valor', () => {
@@ -80,45 +120,18 @@ test('integerServiceId (Tabela C.8): inteiro >= 0, em numero ou texto so de digi
     }
 });
 
-test('a plataforma desfaz a selecao (aop/currentService vazio): volta o 300', async () => {
-    await mqtt.deliver(TOPICS.current_service, SVC);
+test('a plataforma desfaz a selecao (sessao limpa): volta o 300', async () => {
+    selecionar({});
     assert.equal((await get()).status, 200);
-    await mqtt.deliver(TOPICS.current_service, '');
+    desfazer();
     const r = await get();
     assert.equal(r.status, 404);
     assert.equal(r.json.error, 300, JSON.stringify(r.json));
 });
 
-test('session:current-service pela funcao: cinco campos, serviceId e serviceName vazios (sem SLT)', async () => {
-    const tick = () => new Promise(r => setImmediate(r));
-    await mqtt.deliver(TOPICS.current_service, '');
-    for (const sid of [SVC, 'urn:tv30:service:outro', 'urn:tv30:service:fora-da-lista']) {
-        fake.fcalls.length = 0;
-        await mqtt.deliver(TOPICS.current_service, sid);
-        await tick();
-        const chamadas = fake.fcalls.filter(c => c[0] === 'tv30_session_service');
-        assert.equal(chamadas.length, 1, `uma chamada para o servico ${sid}`);
-        const h = fake.store.get('session:current-service') as Record<string, string>;
-        assert.deepEqual(Object.keys(h).sort(), ['originalNetworkId', 'serviceContextId', 'serviceId', 'serviceName', 'transportStreamId']);
-        assert.equal(h.serviceContextId, sid);
-        assert.equal(h.serviceId, '', `serviceId de ${sid}`);
-        assert.equal(h.serviceName, '', `serviceName de ${sid}`);
-    }
-    // The function refuses (data outside the schema): the handler logs and
-    // stays up.
-    const logs: string[] = [];
-    const [logOrig, errorOrig] = [console.log, console.error];
-    console.log = console.error = (...a: unknown[]) => { logs.push(a.join(' ')); };
-    fake.recusar('tv30_session_service', 'TV30SCHEMA tv30_session_service: session:current-service field serviceName: test');
-    try {
-        await mqtt.deliver(TOPICS.current_service, '0');
-        await tick();
-        await tick();
-    } finally {
-        fake.recusar('tv30_session_service');
-        [console.log, console.error] = [logOrig, errorOrig];
-    }
-    assert.ok(logs.some(l => l.includes('session:current-service') && l.includes('TV30SCHEMA')), `recusa logada: ${logs.join(' | ')}`);
-    assert.equal((await get()).status, 200, 'a API do servico corrente segue respondendo da memoria');
-    await mqtt.deliver(TOPICS.current_service, '');
+test('o tv3ws nao grava a sessao do servico: aop/currentService nao chega a nenhuma funcao', async () => {
+    fake.fcalls.length = 0;
+    await mqtt.deliver('aop/currentService', SVC);
+    assert.deepEqual(fake.fcalls, []);
+    assert.equal(fake.store.has('session:current-service'), false);
 });

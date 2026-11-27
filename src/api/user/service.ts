@@ -70,16 +70,6 @@ async function resolveActiveService(): Promise<string> {
     return known ? currentService : '';
 }
 
-// The session mirrors the topics; a value outside the schema is refused, and
-// the MQTT handler logs it.
-async function updateCurrentUser(m: string): Promise<void> {
-    await redisFunctions.sessionUser(m);
-}
-
-async function updateCurrentService(m: string): Promise<void> {
-    await redisFunctions.sessionServiceId(m);
-}
-
 function compareValues(userVal: string, op: string, filterVal: string): boolean {
     const a = isNaN(Number(userVal)) ? userVal : Number(userVal);
     const b = isNaN(Number(filterVal)) ? filterVal : Number(filterVal);
@@ -369,7 +359,5 @@ async function getFile(name: string): Promise<FileData | undefined> {
     };
 }
 
-mqttClient.addTopicHandler(TOPICS.current_user, updateCurrentUser);
-mqttClient.addTopicHandler(TOPICS.current_service, updateCurrentService);
 
 export default { getCurrentUser, setCurrentUser, getUserList, getUserAttributes, checkConsent, getFile, writeBroadcasterAttrs };

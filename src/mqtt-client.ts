@@ -11,7 +11,6 @@ type TopicHandler = {
 
 export const TOPICS = {
     current_user: 'aop/currentUser',
-    current_service: 'aop/currentService',
     app_doc: 'aop/:serviceId/:appId/doc',
     devices: 'aop/devices',
     tuned: 'tlm/tuned',

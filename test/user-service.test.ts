@@ -89,21 +89,15 @@ function seedProfiles(svc: string) {
 }
 
 // --- profiles read only -----------------------------------------------------
-test('nao assina aop/users; assina aop/currentUser e aop/currentService', () => {
+test('nao assina aop/users, aop/currentUser nem aop/currentService: a sessao e lida do Redis', () => {
     assert.ok(!handlers.has('aop/users'));
-    assert.ok(handlers.has('aop/currentUser'));
-    assert.ok(handlers.has('aop/currentService'));
+    assert.ok(!handlers.has('aop/currentUser'));
+    assert.ok(!handlers.has('aop/currentService'));
 });
 
 test('nao semeia users:index no boot, mesmo vazio e com USER_DATA_FILE apontando para um arquivo', async () => {
     await new Promise(r => setTimeout(r, 50));
     assert.equal(store.has('users:index'), false);
-});
-
-test('aop/currentUser so espelha a sessao: nada de lastAccess (nem perfil fantasma)', async () => {
-    await handlers.get('aop/currentUser')!(PX);
-    assert.equal(store.get('session:current-user'), PX);
-    assert.equal(store.has(`user:${PX}`), false);
 });
 
 test('POST current-user (C.6.14.4): grava a sessao e publica retido, sem lastAccess', async () => {
@@ -179,13 +173,11 @@ test('Redis fora do ar: current-user e atributos respondem 404 {error:200}', asy
 });
 
 // --- writes by the Redis functions ------------------------------------------
-test('escritas da sessao saem por FCALL (tv30_session_user, tv30_session_service_id)', async () => {
-    fake.fcalls.length = 0;
-    await handlers.get('aop/currentUser')!(U9);
-    await handlers.get('aop/currentService')!('svc-z');
+test('a unica escrita da sessao e a do C.6.14.4, por FCALL (tv30_session_user)', async () => {
     seedProfiles('svc-a');
+    fake.fcalls.length = 0;
     assert.equal((await call('POST', '/current-service/users/current-user', { id: U1 })).status, 200);
-    assert.deepEqual(fake.fcalls, [['tv30_session_user', U9], ['tv30_session_service_id', 'svc-z'], ['tv30_session_user', U1]]);
+    assert.deepEqual(fake.fcalls, [['tv30_session_user', U1]]);
 });
 
 test('C.6.14.5 pela funcao tv30_broadcaster_attributes: grava, vazio remove, resposta com o alterado', async () => {
@@ -205,7 +197,7 @@ test('C.6.14.5 pela funcao tv30_broadcaster_attributes: grava, vazio remove, res
     assert.deepEqual(fake.fcalls, []);
 });
 
-test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com a mensagem e loga; handler MQTT loga', async () => {
+test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com a mensagem e loga', async () => {
     seedProfiles('svc-a');
     const logs: string[] = [];
     const errorOrig = console.error;
@@ -219,7 +211,6 @@ test('escrita recusada pela funcao (esquema): rota responde 404 {error:200} com 
         assert.ok(r.json.description.includes(msg), r.json.description);
         assert.ok(logs.some(l => l.includes(msg)), 'errorHandler loga a mensagem');
         assert.equal(published.length, publicados, 'nao publica o que nao gravou');
-        await assert.rejects(Promise.resolve(handlers.get('aop/currentUser')!('x'.repeat(65))), { message: msg });
     } finally {
         fake.recusar('tv30_session_user');
         console.error = errorOrig;
@@ -336,7 +327,7 @@ test('C.6.14.5: gravacao com mudanca publica o aviso (nao retido) com o id do se
 
 test('C.6.14.5: o nome do servico corrente (session:current-service) quando a gravacao e nele; outro scid, o id dele', async () => {
     seedProfiles('svc-a');
-    store.set('session:current-service', { serviceContextId: 'x', serviceName: 'Canal Teste', serviceId: '', transportStreamId: 't', originalNetworkId: 'o' });
+    store.set('session:current-service', { serviceContextId: 'x', serviceName: 'Canal Teste', serviceId: '' });
     store.set(`user:${U1}:consent`, new Set(['svc-a', 'svc-b']));
     published.length = 0;
     try {
@@ -349,7 +340,7 @@ test('C.6.14.5: o nome do servico corrente (session:current-service) quando a gr
             'A emissora svc-b atualizou os dados do perfil Um.',
         ]);
         // Empty name (the testbed does not publish aop/services): the id.
-        store.set('session:current-service', { serviceContextId: 'x', serviceName: '', serviceId: '', transportStreamId: 't', originalNetworkId: 'o' });
+        store.set('session:current-service', { serviceContextId: 'x', serviceName: '', serviceId: '' });
         published.length = 0;
         assert.equal((await call('POST', `/svc-a/users/${U1}`, { a: '4' })).status, 200);
         assert.equal(JSON.parse(infos()[0][1]).value, 'A emissora svc-a atualizou os dados do perfil Um.');

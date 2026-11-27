@@ -82,8 +82,6 @@ export function createFakeRedis() {
     // Effect of the tv30 functions tv3ws calls (infra/redis/functions.lua).
     const funcoes: Record<string, (a: string[]) => unknown> = {
         tv30_session_user: ([v]) => { store.set('session:current-user', v); return 1; },
-        tv30_session_service_id: ([v]) => { store.set('session:current-service-id', v); return 1; },
-        tv30_session_service: (a) => { store.set('session:current-service', paresDe(a)); return 1; },
         tv30_broadcaster_attributes: ([id, scid, ...a]) => {
             if (!set('users:index')?.has(id)) throw new Error(`TV30SCHEMA tv30_broadcaster_attributes: user:${id}:broadcaster-attrs:${scid} profile "${id}" outside users:index (invariant profile-dependents)`);
             const k = `user:${id}:broadcaster-attrs:${scid}`;

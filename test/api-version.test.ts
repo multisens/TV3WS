@@ -85,7 +85,8 @@ test('extensao do testbed no caminho /v100.0: rota sem tratador da 100.0 da 100,
 });
 
 test('resposta de sucesso: API-Version = a versao negociada pela borda', async () => {
-    await mqtt.deliver(TOPICS.current_service, 'urn:tv30:service:teste');
+    fake.store.set('session:current-service', { serviceContextId: 'urn:tv30:service:teste', serviceName: '', serviceId: '' });
+    fake.store.set('session:current-service-id', 'urn:tv30:service:teste');
     const r = await call('/tv3/current-service', decided('100.0'));
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.equal(r.apiVersion, '100.0');

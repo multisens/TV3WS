@@ -1,6 +1,6 @@
 import redis from './redis-client';
 
-// The only write point of tv3ws to session:*, client:*, clients:*,
+// The only write point of tv3ws to session:current-user, client:*, clients:*,
 // user:{id}:broadcaster-attrs:{scid} and v100.0:remote-device:{handle}: FCALL
 // of the tv30 functions, which check the schema and write atomically; data
 // outside the schema gives a TV30SCHEMA error and nothing is written.
@@ -17,16 +17,6 @@ function fieldPairs(fields: Record<string, string>): string[] {
 // session:current-user; empty for no current user.
 export function sessionUser(id: string): Promise<unknown> {
     return fcall('tv30_session_user', [id]);
-}
-
-// session:current-service-id; empty for no current service.
-export function sessionServiceId(sid: string): Promise<unknown> {
-    return fcall('tv30_session_service_id', [sid]);
-}
-
-// session:current-service, rewritten whole (the five fields of Table C.8).
-export function sessionService(fields: Record<string, string>): Promise<unknown> {
-    return fcall('tv30_session_service', fieldPairs(fields));
 }
 
 // C.6.14.5: the value '' removes the attribute; the 20 MB limit is checked

@@ -1,20 +1,18 @@
 import * as dotenv from 'dotenv';
 import { z } from 'zod';
 import logger from './logger';
-import mqttClient, { TOPICS, client } from './mqtt-client';
+import { client } from './mqtt-client';
 import { Application, onAssociatedEnded, onAssociatedStarted } from './modules/associated-app';
 import { associateAppNodes, disassociateAppNodes } from './modules/remotedevice-manager/manager';
 import { AppNode } from './modules/remotedevice-manager/remote-device';
 import redis from './redis-client';
-import * as redisFunctions from './redis-functions';
-import { integerServiceId } from './util/service-id';
 
 // Before the globals, which read the environment.
 dotenv.config();
 
 // State shared by the modules of tv3ws: the host of the WebSocket entry
-// points, the running application with the nodes of its document, and the
-// current service; and the pop-ups of the platform.
+// points and the running application with the nodes of its document; and the
+// pop-ups of the platform.
 
 type CoreData = {
     server: {
@@ -25,13 +23,6 @@ type CoreData = {
         sid: string;
         id: string;
         nodes: AppNode[];
-    };
-    current: {
-        serviceName: string;
-        serviceId: number;
-        serviceContextId: string;
-        transportStreamId: string;
-        originalNetworkId: string;
     };
 };
 
@@ -71,15 +62,6 @@ const data: CoreData = {
         sid: '',
         id: '',
         nodes: [],
-    },
-    current: {
-        serviceName: '',
-        serviceId: -1,
-        // globalServiceId of the current service (ABNT NBR 25608, Table 6
-        // and C.3.5), set in currentService.
-        serviceContextId: '',
-        transportStreamId: 'c08b2c72-fd14-4095-adaf-2e5810850c57',
-        originalNetworkId: '09e59a1d-e2e7-467e-85db-2fb5a572e2fc',
     },
 };
 
@@ -152,31 +134,6 @@ function onApplicationEnded(associatedId: string): void {
     data.app.nodes = [];
 }
 
-// aop/currentService. Without an SLT there is no serviceId or serviceName:
-// the topic carries only the serviceContextId. Without a current service the
-// session hash stays as it was: the schema requires serviceContextId.
-function currentService(sid: string): void {
-    if (sid === data.current.serviceContextId) {
-        return;
-    }
-    data.current.serviceId = -1;
-    data.current.serviceName = '';
-    data.current.serviceContextId = sid;
-    if (sid === '') {
-        return;
-    }
-    // tv30_session_service rewrites the whole hash and checks the schema.
-    // serviceId: a decimal integer or empty (ABNT NBR 25608, Table C.8).
-    const serviceId = integerServiceId(data.current.serviceId);
-    redisFunctions.sessionService({
-        serviceContextId: data.current.serviceContextId,
-        serviceId: serviceId === undefined ? '' : String(serviceId),
-        serviceName: data.current.serviceName,
-        transportStreamId: data.current.transportStreamId,
-        originalNetworkId: data.current.originalNetworkId,
-    }).catch((err: Error) => logger.error(`[Redis] Failed to persist session:current-service: ${err.message}`));
-}
-
 function onPopUpMessage(topic: string, message: Buffer): void {
     const handler = popUpHandlers.get(topic);
     if (handler === undefined) {
@@ -204,7 +161,6 @@ function docNodesKey(serviceContextId: string): string {
 
 onAssociatedStarted(onApplicationStarted);
 onAssociatedEnded(onApplicationEnded);
-mqttClient.addTopicHandler(TOPICS.current_service, currentService);
 client.on('message', onPopUpMessage);
 
 export default data;
